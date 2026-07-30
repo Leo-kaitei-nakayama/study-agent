@@ -37,6 +37,8 @@ MASTER_KEYS = {
     "openai": os.getenv("OPENAI_API_KEY", ""),
     "deepseek": os.getenv("DEEPSEEK_API_KEY", ""),
 }
+
+db.init_db()
 DEFAULT_ROUTING = {"math_cs": "claude", "multiple_choice": "openai",
                   "general": "deepseek"}
 
@@ -252,5 +254,4 @@ def _run_task(kind: str):
 
 
 if __name__ == "__main__":
-    db.init_db()
     app.run(debug=True, port=5050)
