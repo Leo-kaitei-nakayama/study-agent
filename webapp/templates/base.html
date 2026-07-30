@@ -15,6 +15,7 @@
     {% if session.get('user_id') %}
     <nav>
       <a href="{{ url_for('dashboard') }}">ステータス</a>
+      <a href="{{ url_for('notes_library') }}">ノート</a>
       <a href="{{ url_for('plans') }}">プラン</a>
       <a href="{{ url_for('logout') }}">ログアウト</a>
     </nav>

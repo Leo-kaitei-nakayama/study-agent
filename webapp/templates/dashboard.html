@@ -3,10 +3,10 @@
 
 <div class="card">
   <div class="profile-header">
-    <div class="avatar">{{ user.username[:2].upper() }}</div>
+    <div class="avatar">{{ profile.preferred_name[:2].upper() }}</div>
     <div>
-      <div class="name">{{ user.username }}</div>
-      <div class="sub">{{ plan.label }} プラン ・ {{ user.email }}</div>
+      <div class="name">{{ profile.preferred_name }}</div>
+      <div class="sub">{{ plan.label }} プラン ・ {{ profile.school or user.email }}{% if profile.major %} ・ {{ profile.major }}{% endif %}</div>
     </div>
   </div>
 
@@ -50,11 +50,11 @@
 <div class="card">
   <div class="label" style="font-size:13px; color:var(--text-2); margin-bottom:8px;">科目メモリ</div>
   {% if courses %}
-    {% for name in courses.keys() %}
-      <span class="course-chip">{{ name }}</span>
+    {% for c in courses %}
+      <a class="course-chip" href="{{ url_for('notes_course', course_id=c.id) }}" style="text-decoration:none; color:inherit;">{{ c.name }}</a>
     {% endfor %}
   {% else %}
-    <span style="font-size:13px; color:var(--text-muted);">まだ科目が登録されていません(CLIの `course` コマンドで登録できます)</span>
+    <span style="font-size:13px; color:var(--text-muted);">まだ科目が登録されていません(オンボーディングまたはタスク実行時に登録できます)</span>
   {% endif %}
 </div>
 
@@ -63,16 +63,28 @@
   <div class="action-grid">
     <form method="post" action="{{ url_for('task_notes') }}" enctype="multipart/form-data">
       <label>📝 ノート作成</label>
+      <select name="course">
+        <option value="__none__">科目を選択(任意)</option>
+        {% for c in courses %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+      </select>
       <input type="file" name="file" required>
       <button class="btn" type="submit">実行</button>
     </form>
     <form method="post" action="{{ url_for('task_draft') }}" enctype="multipart/form-data">
       <label>✍️ 課題ドラフト</label>
+      <select name="course">
+        <option value="__none__">科目を選択(任意)</option>
+        {% for c in courses %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+      </select>
       <input type="file" name="file" required>
       <button class="btn" type="submit">実行</button>
     </form>
     <form method="post" action="{{ url_for('task_quiz') }}" enctype="multipart/form-data">
       <label>❓ クイズ回答</label>
+      <select name="course">
+        <option value="__none__">科目を選択(任意)</option>
+        {% for c in courses %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+      </select>
       <input type="file" name="file" required>
       <button class="btn" type="submit">実行</button>
     </form>

@@ -109,4 +109,28 @@ input:focus { outline: none; border-color: var(--accent); }
 .action-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px; }
 .action-grid form { display: flex; flex-direction: column; gap: 8px; }
 .action-grid input[type=file] { font-size: 12px; }
+.action-grid select {
+  font-size: 12px; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg); color: var(--text);
+}
 .action-grid button { font-size: 13px; }
+
+.notes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+.notes-tile {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 20px 12px; text-decoration: none; color: var(--text);
+}
+.notes-tile:hover { border-color: var(--accent); }
+.notes-tile-icon { font-size: 32px; margin-bottom: 8px; }
+.notes-tile-name { font-weight: 600; font-size: 14px; }
+.notes-tile-count { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+
+.note-row {
+  display: flex; align-items: center; gap: 12px; padding: 10px 0;
+  border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.note-row:last-child { border-bottom: none; }
+.note-kind { flex: 0 0 130px; }
+.note-source { flex-grow: 1; color: var(--text-2); }
+.note-date { color: var(--text-muted); }

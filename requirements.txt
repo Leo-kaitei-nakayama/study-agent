@@ -10,3 +10,5 @@ keyring>=25.0
 cryptography>=42.0
 flask>=3.0
 gunicorn>=21.0
+psycopg[binary]>=3.1
+psycopg-pool>=3.2

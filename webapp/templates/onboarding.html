@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="intro-hero">
+  <h1>はじめまして</h1>
+  <p>いくつか教えてください。あとから設定で変更できます。</p>
+</div>
+
+<div class="card">
+  <form method="post">
+    <label for="preferred_name">何と呼べばいいですか?</label>
+    <input type="text" id="preferred_name" name="preferred_name" placeholder="Leo" required>
+
+    <label for="school">学校</label>
+    <input type="text" id="school" name="school" placeholder="UC Irvine">
+
+    <label for="major">専攻</label>
+    <input type="text" id="major" name="major" placeholder="Business Information Management / CS">
+
+    <label for="classes">今学期の科目(1行に1つ)</label>
+    <textarea id="classes" name="classes" rows="5"
+      placeholder="MGMT 109&#10;CS 178&#10;STATS 7"
+      style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:14px; background:var(--bg); font-family:inherit;"></textarea>
+
+    <button class="btn btn-primary btn-block" type="submit">はじめる</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="intro-hero">
+  <h1>{{ course.name if course else "未分類" }}</h1>
+  <p><a href="{{ url_for('notes_library') }}">← ノート一覧に戻る</a></p>
+</div>
+
+<div class="card">
+  {% if notes %}
+    {% for n in notes %}
+    <div class="note-row">
+      <span class="note-kind">{{ {"notes": "📝 ノート", "draft": "✍️ 課題ドラフト", "quiz": "❓ クイズ回答"}.get(n.kind, n.kind) }}</span>
+      <span class="note-source">{{ n.source_name }}</span>
+      <span class="note-date">{{ n.created_at[:10] }}</span>
+      <a class="btn" href="{{ url_for('notes_download', note_id=n.id) }}">ダウンロード</a>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:var(--text-muted); font-size:14px;">まだノートがありません。</p>
+  {% endif %}
+</div>
+{% endblock %}

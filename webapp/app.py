@@ -10,6 +10,7 @@
 """
 import os
 import sys
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
@@ -37,10 +38,10 @@ MASTER_KEYS = {
     "openai": os.getenv("OPENAI_API_KEY", ""),
     "deepseek": os.getenv("DEEPSEEK_API_KEY", ""),
 }
-
-db.init_db()
 DEFAULT_ROUTING = {"math_cs": "claude", "multiple_choice": "openai",
-                  "general": "deepseek"}
+                  "general": "openai"}  # DeepSeekは今は未使用
+
+db.init_db()  # gunicorn は __main__ を実行しないので、ここで初期化しておく
 
 
 def login_required(fn):
@@ -89,6 +90,8 @@ def verify():
             db.mark_verified(user_id)
             session.pop("pending_user_id", None)
             session["user_id"] = user_id
+            if not db.get_profile(user_id):
+                return redirect(url_for("onboarding"))
             if not db.get_subscription(user_id):
                 return redirect(url_for("plans"))
             return redirect(url_for("dashboard"))
@@ -135,6 +138,75 @@ def logout():
     return redirect(url_for("login"))
 
 
+# -------------------------------------------------------------- onboarding
+@app.route("/onboarding", methods=["GET", "POST"])
+@login_required
+def onboarding():
+    user_id = session["user_id"]
+    if request.method == "POST":
+        preferred_name = request.form["preferred_name"].strip()
+        major = request.form.get("major", "").strip()
+        school = request.form.get("school", "").strip()
+        classes_raw = request.form.get("classes", "")
+        if not preferred_name:
+            flash("呼び方を入力してください")
+            return render_template("onboarding.html")
+
+        db.set_profile(user_id, preferred_name, major, school)
+        for line in classes_raw.splitlines():
+            name = line.strip()
+            if name:
+                db.add_course(user_id, name)
+
+        if not db.get_subscription(user_id):
+            return redirect(url_for("plans"))
+        return redirect(url_for("dashboard"))
+    return render_template("onboarding.html")
+
+
+@app.route("/notes")
+@login_required
+def notes_library():
+    user_id = session["user_id"]
+    courses = db.list_user_courses(user_id)
+    counts = db.notes_count_by_course(user_id)
+    uncategorized_count = counts.get(None, 0)
+    return render_template("notes_library.html", courses=courses, counts=counts,
+                          uncategorized_count=uncategorized_count)
+
+
+@app.route("/notes/course/<int:course_id>")
+@login_required
+def notes_course(course_id):
+    user_id = session["user_id"]
+    course = db.get_course(user_id, course_id)
+    if not course:
+        flash("科目が見つかりません")
+        return redirect(url_for("notes_library"))
+    notes = db.list_notes_for_course(user_id, course_id)
+    return render_template("notes_course.html", course=course, notes=notes)
+
+
+@app.route("/notes/uncategorized")
+@login_required
+def notes_uncategorized():
+    user_id = session["user_id"]
+    notes = db.list_notes_for_course(user_id, None)
+    return render_template("notes_course.html", course=None, notes=notes)
+
+
+@app.route("/notes/download/<int:note_id>")
+@login_required
+def notes_download(note_id):
+    user_id = session["user_id"]
+    row = db.get_note(user_id, note_id)
+    if not row:
+        flash("ファイルが見つかりません")
+        return redirect(url_for("notes_library"))
+    return send_file(OUTPUT_DIR / row["filename"], as_attachment=True,
+                     download_name=row["source_name"])
+
+
 # ------------------------------------------------------------------ plans
 @app.route("/plans", methods=["GET", "POST"])
 @login_required
@@ -155,16 +227,17 @@ def plans():
 @login_required
 def dashboard():
     user = db.get_user(session["user_id"])
+    profile = db.get_profile(session["user_id"])
+    if not profile:
+        return redirect(url_for("onboarding"))
     sub = db.get_subscription(session["user_id"])
     if not sub:
         return redirect(url_for("plans"))
     usage = db.usage_this_cycle(session["user_id"])
     cost = _estimate_cost(usage)
+    courses = db.list_user_courses(session["user_id"])
 
-    from study_agent import memory as mem
-    courses = mem.list_courses()
-
-    return render_template("dashboard.html", user=user, sub=sub,
+    return render_template("dashboard.html", user=user, profile=profile, sub=sub,
                           plan=PLANS[sub["plan"]], usage_count=len(usage),
                           cost=cost, courses=courses)
 
@@ -190,7 +263,7 @@ def _user_routing(user_id: int) -> dict:
     routing = dict(DEFAULT_ROUTING)
     for task, provider in list(routing.items()):
         if sub and sub[f"remaining_{provider}"] <= 0:
-            for alt in ("deepseek", "openai", "claude"):
+            for alt in ("openai", "claude"):  # DeepSeekは今は未使用
                 if sub[f"remaining_{alt}"] > 0:
                     routing[task] = alt
                     break
@@ -222,34 +295,43 @@ def _run_task(kind: str):
         flash("ファイルを選択してください")
         return redirect(url_for("dashboard"))
 
+    course_choice = request.form.get("course", "").strip()
+    course_id = None
+    if course_choice and course_choice != "__none__":
+        course_id = db.add_course(user_id, course_choice)
+
     in_path = UPLOAD_DIR / f"{user_id}_{f.filename}"
     f.save(in_path)
     cb = _make_usage_callback(user_id, kind)
     routing = _user_routing(user_id)
 
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    base = Path(f.filename).stem
+    ext = "docx" if kind in ("notes", "draft") else "md"
+    out_filename = f"{user_id}_{stamp}_{kind}_{base}.{ext}"
+    out_path = OUTPUT_DIR / out_filename
+
     try:
         if kind == "notes":
             from study_agent.notes import make_notes
-            out = make_notes(str(in_path),
-                             out_path=str(OUTPUT_DIR / f"{user_id}_notes.docx"),
+            out = make_notes(str(in_path), out_path=str(out_path),
                              api_keys=MASTER_KEYS, usage_callback=cb, routing=routing)
         elif kind == "draft":
             from study_agent.assignment import make_draft
-            out = make_draft(str(in_path),
-                             out_path=str(OUTPUT_DIR / f"{user_id}_draft.docx"),
+            out = make_draft(str(in_path), out_path=str(out_path),
                              api_keys=MASTER_KEYS, usage_callback=cb, routing=routing)
         else:  # quiz
             from study_agent.quiz import answer_quiz
             text = answer_quiz(str(in_path), notes_dir=str(OUTPUT_DIR),
                                api_keys=MASTER_KEYS, usage_callback=cb,
                                routing=routing)
-            out_path = OUTPUT_DIR / f"{user_id}_quiz_answer.md"
             out_path.write_text(text, encoding="utf-8")
             out = str(out_path)
     except Exception as e:  # noqa: BLE001
         flash(f"エラー: {e}")
         return redirect(url_for("dashboard"))
 
+    db.add_note(user_id, course_id, kind, out_filename, f.filename)
     return send_file(out, as_attachment=True)
 
 
