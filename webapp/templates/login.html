@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="intro-hero">
+  <h1>ログイン</h1>
+  <p>登録済みのメールアドレスに確認コードを送ります。</p>
+</div>
+<div class="card">
+  <form method="post">
+    <label for="email">メールアドレス</label>
+    <input type="email" id="email" name="email" placeholder="name@uci.edu" required>
+    <button class="btn btn-primary btn-block" type="submit">確認コードを送信</button>
+  </form>
+  <p style="text-align:center; font-size:13px; color:var(--text-2); margin-top:14px;">
+    アカウントをお持ちでないですか? <a href="{{ url_for('signup') }}">サインアップ</a>
+  </p>
+</div>
+{% endblock %}

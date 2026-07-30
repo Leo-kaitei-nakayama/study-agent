@@ -1,0 +1,9 @@
+# ブラウザ操作の設定
+model: claude-sonnet-4-6
+headless: false        # true にすると画面非表示で実行
+max_steps: 40
+
+# アクセスを許可するドメイン。空リスト/コメントアウトで制限なし。
+allowed_domains:
+  - canvas.eee.uci.edu
+  - "*.uci.edu"
