@@ -1,0 +1,870 @@
+"""画面の多言語対応(英語 / 日本語 / 中国語 / 韓国語)。
+
+■ このファイルの役割
+画面に出る文字列をすべてここに集める。テンプレートや app.py の側は
+`t("nav.notes")` のようにキーで呼び、実際の文字は言語ごとの辞書から引く。
+
+■ なぜ gettext (.po/.mo) ではないのか
+gettext はコンパイル手順(pybabel compile)が要る。この構成は Render に
+git push するだけで動くのが利点なので、ビルド工程を増やさない素の dict に
+した。言語を足すときは LANGUAGES と TRANSLATIONS に 1 つずつ追加する。
+
+■ 言語の決まり方(先に見つかったものが勝つ)
+  1. URL の ?lang=xx  … 言語ボタンから来たとき
+  2. セッション        … その後はブラウザに覚えさせる
+  3. プロフィールの lang … ログイン済みなら端末を変えても引き継ぐ
+  4. ブラウザの Accept-Language
+  5. 既定の英語
+
+■ 追加するときの約束
+- キーは「画面.用途」の形(例 dashboard.balance_label)
+- 英語(en)には必ず全キーを書く。他の言語で抜けたキーは英語にフォールバック
+  するので、翻訳が間に合わなくても画面は壊れない
+- `{}` を含む文字列は t("key", 名前=値) で埋める
+"""
+from flask import g, has_request_context, request, session
+
+# 言語コード → 言語切り替えボタンに出す表示名(その言語自身の表記)
+LANGUAGES = {
+    "en": "English",
+    "ja": "日本語",
+    "zh": "中文",
+    "ko": "한국어",
+}
+
+DEFAULT_LANG = "en"
+
+# AI が生成するノート / ドラフトの出力言語。画面の言語に合わせる。
+# study_agent 側の関数はこの文字列をそのままプロンプトに埋める。
+AI_OUTPUT_LANG = {
+    "en": "English",
+    "ja": "日本語",
+    "zh": "中文",
+    "ko": "한국어",
+}
+
+TRANSLATIONS: dict[str, dict[str, str]] = {}
+
+# --------------------------------------------------------------- English
+TRANSLATIONS["en"] = {
+    # ---- 共通 / ナビ
+    "brand.tagline": "Study smarter, not harder",
+    "nav.status": "Status",
+    "nav.notes": "Notes",
+    "nav.academic": "Academic",
+    "nav.services": "Services",
+    "nav.credit": "Add credit",
+    "nav.logout": "Log out",
+    "nav.language": "Language",
+    "common.save": "Save",
+    "common.delete": "Delete",
+    "common.add": "Add",
+    "common.upload": "Upload",
+    "common.run": "Run",
+    "common.download": "Download",
+    "common.none": "—",
+    "common.optional": "optional",
+    "common.unused": "Not used yet",
+    "common.back": "Back",
+
+    # ---- サインアップ
+    "signup.tagline": "Turn textbooks into notes, draft practice problems, and keep up with Canvas.<br>Each task is routed to the AI that handles it best.",
+    "signup.email": "Email address",
+    "signup.username": "Username",
+    "signup.send_code": "Send verification code",
+    "signup.have_account": "Already have an account?",
+    "signup.login_link": "Log in",
+
+    # ---- ログイン
+    "login.title": "Log in",
+    "login.subtitle": "We will email a verification code to your registered address.",
+    "login.no_account": "Do not have an account yet?",
+    "login.signup_link": "Sign up",
+
+    # ---- 確認コード
+    "verify.title": "Verify your email",
+    "verify.subtitle": "Enter the 6-digit code we sent you.",
+    "verify.dev_mode": "Development mode: email delivery is not connected, so the code is shown here →",
+    "verify.submit": "Verify and continue",
+
+    # ---- オンボーディング
+    "onboarding.title": "Welcome",
+    "onboarding.subtitle": "A few quick questions. You can change these later.",
+    "onboarding.name_q": "What should we call you?",
+    "onboarding.school": "School",
+    "onboarding.major": "Major",
+    "onboarding.classes": "This term's courses (one per line)",
+    "onboarding.start": "Get started",
+
+    # ---- ダッシュボード
+    "dashboard.title": "Status",
+    "dashboard.term_quarter": "Quarter system",
+    "dashboard.term_semester": "Semester system",
+    "dashboard.balance_label": "Credit balance",
+    "dashboard.balance_topup": "+ Add credit",
+    "dashboard.balance_usage": "{count} runs this cycle · ${cost} used",
+    "dashboard.balance_empty": "No credit left. Add credit to run AI tasks.",
+    "dashboard.courses": "Courses",
+    "dashboard.notes_link": "All notes →",
+    "dashboard.no_courses": "No courses yet. Connect the Chrome extension, or enter a course name when you run a task below.",
+    "dashboard.shortcut_academic": "Academic / GPA",
+    "dashboard.shortcut_academic_sub": "Import your transcript and track progress toward graduation",
+    "dashboard.shortcut_services": "Connected services",
+    "dashboard.shortcut_services_sub": "Save logins for the sites your classes use",
+    "dashboard.shortcut_services_count": "{count} sites saved",
+    "dashboard.shortcut_planner_sub": "Plan your courses (external site)",
+    "dashboard.ext_title": "Chrome extension",
+    "dashboard.ext_hint": "Issuing a new token invalidates the previous one.",
+    "dashboard.ext_issue": "Issue a new token",
+    "dashboard.ext_issued": "Token issued. Connect the extension automatically below, or paste the value into the extension popup by hand — this value is shown only once.",
+    "dashboard.ext_connect": "Connect extension automatically",
+    "dashboard.ext_manual": "Token for manual entry:",
+    "dashboard.ext_prompt_id": "Enter the extension ID shown on chrome://extensions:",
+    "dashboard.ext_no_auto": "Automatic connection is not available from this page. Please paste the token manually.",
+    "dashboard.ext_no_id": "No extension ID was entered.",
+    "dashboard.ext_fail": "Connection failed:",
+    "dashboard.ext_check_id": "(check the extension ID)",
+    "dashboard.ext_success": "Connected to the extension.",
+    "dashboard.tasks_title": "Run a task",
+    "dashboard.task_notes": "Create notes",
+    "dashboard.task_notes_hint": "Textbook or slides → structured notes",
+    "dashboard.task_draft": "Draft assignment",
+    "dashboard.task_draft_hint": "Practice problems → draft answers with explanations",
+    "dashboard.task_quiz": "Answer quiz",
+    "dashboard.task_quiz_hint": "Answers grounded in this week's notes",
+    "dashboard.course_select": "Select a course (optional)",
+    "dashboard.no_credit_hint": "You have no credit left, so tasks cannot run. Please",
+    "dashboard.no_credit_link": "add credit",
+
+    # ---- 学業 / GPA
+    "academic.title": "Academic",
+    "academic.grad_units": "{units} units to graduate",
+    "academic.official_note": "GPA and units shown as reported on your transcript.",
+    "academic.gpa_label": "Cumulative GPA",
+    "academic.units_earned": "Units earned",
+    "academic.remaining": "Units remaining",
+    "academic.gpa_units": "Units counted in GPA",
+    "academic.progress": "{earned} / {goal} units ({pct}%)",
+    "academic.planner_btn": "Plan your courses in {planner} →",
+    "academic.planner_note": "Course sequencing is managed in {planner}.",
+    "academic.step_login": "Sign in to Student Access",
+    "academic.step_open": "Open \u201cUnofficial Transcript\u201d",
+    "academic.step_save": "Save the page (\u2318S / Ctrl+S) \u2192 you get an .html file",
+    "academic.step_upload": "Upload that .html file here",
+    "academic.upload_title": "Import your transcript",
+    "academic.last_upload": "Last uploaded: {date}",
+    "academic.reupload_note": "Re-uploading replaces the previously imported records. Manually added courses are kept.",
+    "academic.term_summary": "GPA {gpa} · {units} units",
+    "academic.col_course": "Course",
+    "academic.col_title": "Title",
+    "academic.col_units": "Units",
+    "academic.col_grade": "Grade",
+    "academic.no_data": "No transcript imported yet. Upload one above, or add courses by hand below.",
+    "academic.manual_title": "Add a course by hand",
+    "academic.manual_note": "Use this if the transcript could not be parsed automatically.",
+    "academic.manual_term": "Term",
+
+    # ---- 連携サービス
+    "services.title": "Connected services",
+    "services.subtitle": "Save the login for a site your classes use, and the agent can sign in on its own to fetch materials.",
+    "services.no_key_warning": "<code>CREDENTIAL_KEY</code> is not set on the server, so passwords cannot be encrypted. New logins cannot be saved until an administrator sets it.",
+    "services.registered": "Saved sites",
+    "services.col_site": "Site",
+    "services.col_user": "Username",
+    "services.col_course": "Course",
+    "services.col_last_used": "Last used",
+    "services.pw_note": "Passwords are stored encrypted and cannot be displayed. To change one, save it again with the same URL.",
+    "services.empty": "No sites saved yet.",
+    "services.add_title": "Add a site",
+    "services.label": "Site name",
+    "services.url": "URL",
+    "services.username": "Username or email",
+    "services.password": "Password",
+    "services.course": "Related course (optional)",
+    "services.course_none": "Not specified",
+    "services.confirm_delete": "Delete the saved login for {label}?",
+    "services.security_title": "About security",
+    "services.sec_encrypted": "Passwords are encrypted on the server before being saved. They cannot be read from the database directly.",
+    "services.sec_decrypt": "They are decrypted only at the moment the agent signs in to that site. Passwords are never included in prompts sent to the AI.",
+    "services.sec_canvas": "<strong>Do not add Canvas here.</strong> The Chrome extension uses your existing signed-in session.",
+    "services.sec_readonly": "The agent only retrieves materials. It never submits, sends, or purchases anything.",
+
+    # ---- チャージ
+    "plans.title": "Add credit",
+    "plans.subtitle": "Use the AI as much as your credit allows. Each run deducts its actual cost.",
+    "plans.balance_now": "Current balance",
+    "plans.credit_amount": "→ ${amount} of credit",
+    "plans.browse": "Browser automation",
+    "plans.charge_btn": "Add this credit",
+    "plans.mock_note": "Payments are currently mocked. You will not be charged.",
+    "plans.popular": "Popular",
+    "plans.blurb_basic": "Try it out. Roughly 100 sets of notes.",
+    "plans.blurb_standard": "Weekly assignment drafts and quiz help. +10% bonus.",
+    "plans.blurb_pro": "Claude-first for accuracy. More than you will use. +20% bonus.",
+
+    # ---- ノート
+    "notes.title": "Notes",
+    "notes.subtitle": "Notes, assignment drafts and quiz answers, grouped by course.",
+    "notes.count": "{count} items",
+    "notes.uncategorized": "Uncategorized",
+    "notes.empty_library": "No notes yet. Run Create notes, Draft assignment or Answer quiz from the dashboard and they will appear here.",
+    "notes.back_to_library": "← Back to all notes",
+    "notes.empty_course": "No notes yet.",
+    "notes.kind_notes": "Notes",
+    "notes.kind_draft": "Assignment draft",
+    "notes.kind_quiz": "Quiz answer",
+    "notes.kind_syllabus": "Syllabus",
+    "notes.kind_assignments": "Assignment list",
+    "notes.kind_resource": "Resource",
+    "notes.kind_practice_answer": "Practice answer",
+
+    # ---- flash メッセージ
+    "flash.need_email_username": "Please enter both an email address and a username.",
+    "flash.bad_code": "That code is incorrect or has expired.",
+    "flash.no_account": "No account was found for that email address.",
+    "flash.need_name": "Please tell us what to call you.",
+    "flash.file_missing": "Please choose a file.",
+    "flash.course_missing": "Course not found.",
+    "flash.note_missing": "File not found.",
+    "flash.no_credit": "You have no credit left. Please add credit before running a task.",
+    "flash.payment_failed": "Payment failed.",
+    "flash.unknown_plan": "Unknown plan.",
+    "flash.charged": "Added ${amount} of credit (balance ${balance}).",
+    "flash.no_crypto_key": "Passwords cannot be stored securely because CREDENTIAL_KEY is not set on the server. Please contact the administrator.",
+    "flash.cred_fields_required": "Please fill in the site name, URL, username and password.",
+    "flash.cred_saved": "Saved the login for {label}.",
+    "flash.cred_deleted": "Login deleted.",
+    "flash.transcript_missing": "Please choose your transcript .html file.",
+    "flash.transcript_imported": "Imported {count} courses ({terms}).",
+    "flash.units_numeric": "Units must be a number.",
+    "flash.manual_fields_required": "Please enter the term, course code, units and grade.",
+    "flash.manual_added": "Added {code}.",
+    "flash.error": "Error: {message}",
+}
+
+# --------------------------------------------------------------- 日本語
+TRANSLATIONS["ja"] = {
+    "brand.tagline": "頑張るより、賢く学ぶ",
+    "nav.status": "ステータス",
+    "nav.notes": "ノート",
+    "nav.academic": "学業",
+    "nav.services": "連携",
+    "nav.credit": "チャージ",
+    "nav.logout": "ログアウト",
+    "nav.language": "言語",
+    "common.save": "保存する",
+    "common.delete": "削除",
+    "common.add": "追加",
+    "common.upload": "アップロード",
+    "common.run": "実行",
+    "common.download": "ダウンロード",
+    "common.none": "—",
+    "common.optional": "任意",
+    "common.unused": "未使用",
+    "common.back": "戻る",
+
+    "signup.tagline": "教科書からノート作成、練習課題のドラフト、Canvasのチェックまで。<br>タスクに合わせて最適なAIに自動で振り分けます。",
+    "signup.email": "メールアドレス",
+    "signup.username": "ユーザー名",
+    "signup.send_code": "確認コードを送信",
+    "signup.have_account": "すでにアカウントをお持ちですか?",
+    "signup.login_link": "ログイン",
+
+    "login.title": "ログイン",
+    "login.subtitle": "登録済みのメールアドレスに確認コードを送ります。",
+    "login.no_account": "アカウントをお持ちでないですか?",
+    "login.signup_link": "サインアップ",
+
+    "verify.title": "メール確認",
+    "verify.subtitle": "届いた6桁のコードを入力してください。",
+    "verify.dev_mode": "開発モード: メール送信は未接続のため、コードをここに表示しています →",
+    "verify.submit": "認証してログイン",
+
+    "onboarding.title": "はじめまして",
+    "onboarding.subtitle": "いくつか教えてください。あとから設定で変更できます。",
+    "onboarding.name_q": "何と呼べばいいですか?",
+    "onboarding.school": "学校",
+    "onboarding.major": "専攻",
+    "onboarding.classes": "今学期の科目(1行に1つ)",
+    "onboarding.start": "はじめる",
+
+    "dashboard.title": "ステータス",
+    "dashboard.term_quarter": "クォーター制",
+    "dashboard.term_semester": "セメスター制",
+    "dashboard.balance_label": "クレジット残高",
+    "dashboard.balance_topup": "＋ チャージ",
+    "dashboard.balance_usage": "今サイクル {count} 回実行 ・ 使用額 ${cost}",
+    "dashboard.balance_empty": "残高がありません。チャージすると AI タスクを実行できます。",
+    "dashboard.courses": "科目",
+    "dashboard.notes_link": "ノート一覧 →",
+    "dashboard.no_courses": "まだ科目がありません。Chrome 拡張機能を接続するか、下のタスク実行時に科目名を入れると登録されます。",
+    "dashboard.shortcut_academic": "学業 / GPA",
+    "dashboard.shortcut_academic_sub": "成績表を取り込んで卒業単位までの進捗を見る",
+    "dashboard.shortcut_services": "連携サービス",
+    "dashboard.shortcut_services_sub": "授業で使うサイトのログインを登録",
+    "dashboard.shortcut_services_count": "{count} サイト登録済み",
+    "dashboard.shortcut_planner_sub": "履修計画を立てる(外部サイト)",
+    "dashboard.ext_title": "Chrome 拡張機能との連携",
+    "dashboard.ext_hint": "発行すると既存のトークンは失効します。",
+    "dashboard.ext_issue": "新しいトークンを発行",
+    "dashboard.ext_issued": "トークンを発行しました。下のボタンで拡張機能に自動接続するか、表示された値を手動でポップアップに貼り付けてください(この値は今しか表示されません)。",
+    "dashboard.ext_connect": "拡張機能に自動接続",
+    "dashboard.ext_manual": "手動用トークン:",
+    "dashboard.ext_prompt_id": "chrome://extensions で表示されるこの拡張機能のIDを入力してください:",
+    "dashboard.ext_no_auto": "この画面からは自動接続できません。手動でトークンを貼り付けてください。",
+    "dashboard.ext_no_id": "拡張機能IDが未入力です。",
+    "dashboard.ext_fail": "接続失敗:",
+    "dashboard.ext_check_id": "(拡張機能IDを確認してください)",
+    "dashboard.ext_success": "拡張機能に自動接続しました",
+    "dashboard.tasks_title": "タスクを実行",
+    "dashboard.task_notes": "ノート作成",
+    "dashboard.task_notes_hint": "教科書・スライド → 構造化ノート",
+    "dashboard.task_draft": "課題ドラフト",
+    "dashboard.task_draft_hint": "練習課題 → 解答ドラフト + 解説",
+    "dashboard.task_quiz": "クイズ回答",
+    "dashboard.task_quiz_hint": "その週のノートを根拠に回答",
+    "dashboard.course_select": "科目を選択(任意)",
+    "dashboard.no_credit_hint": "クレジット残高がないため実行できません。まず",
+    "dashboard.no_credit_link": "チャージ",
+
+    "academic.title": "学業",
+    "academic.grad_units": "卒業要件 {units} 単位",
+    "academic.official_note": "GPA と単位は成績表に記載の公式値です。",
+    "academic.gpa_label": "累積 GPA",
+    "academic.units_earned": "取得単位",
+    "academic.remaining": "卒業まで残り",
+    "academic.gpa_units": "GPA 対象単位",
+    "academic.progress": "{earned} / {goal} 単位({pct}%)",
+    "academic.planner_btn": "{planner} で履修計画を立てる →",
+    "academic.planner_note": "卒業までの科目の並べ方は {planner} 側で管理します。",
+    "academic.step_login": "Student Access にログインする",
+    "academic.step_open": "「Unofficial Transcript」を開く",
+    "academic.step_save": "ページを保存する(⌘S / Ctrl+S)→ .html ファイルができる",
+    "academic.step_upload": "その .html をここにアップロードする",
+    "academic.upload_title": "成績表を取り込む",
+    "academic.last_upload": "最終アップロード: {date}",
+    "academic.reupload_note": "再アップロードすると、前回の取り込み分は置き換わります(手入力した科目は残ります)。",
+    "academic.term_summary": "GPA {gpa} ・ {units} 単位",
+    "academic.col_course": "科目",
+    "academic.col_title": "タイトル",
+    "academic.col_units": "単位",
+    "academic.col_grade": "成績",
+    "academic.no_data": "まだ成績表が取り込まれていません。上のフォームからアップロードするか、下で手入力してください。",
+    "academic.manual_title": "手入力で科目を追加",
+    "academic.manual_note": "成績表の自動解析がうまくいかなかったときに使ってください。",
+    "academic.manual_term": "学期",
+
+    "services.title": "連携サービス",
+    "services.subtitle": "授業で使うサイトのログイン情報を登録しておくと、エージェントが自分でログインして資料を取りに行きます。",
+    "services.no_key_warning": "サーバーに <code>CREDENTIAL_KEY</code> が設定されていないため、パスワードを暗号化して保存できません。管理者が環境変数を設定するまで、新しい登録はできません。",
+    "services.registered": "登録済みのサイト",
+    "services.col_site": "サイト",
+    "services.col_user": "ユーザー名",
+    "services.col_course": "科目",
+    "services.col_last_used": "最終利用",
+    "services.pw_note": "パスワードは暗号化して保存されているため表示できません。変更したいときは同じ URL で登録し直してください。",
+    "services.empty": "まだ登録されたサイトはありません。",
+    "services.add_title": "サイトを追加",
+    "services.label": "サイト名",
+    "services.url": "URL",
+    "services.username": "ユーザー名 / メールアドレス",
+    "services.password": "パスワード",
+    "services.course": "関連する科目(任意)",
+    "services.course_none": "指定しない",
+    "services.confirm_delete": "{label} のログイン情報を削除しますか?",
+    "services.security_title": "安全性について",
+    "services.sec_encrypted": "パスワードは保存する前にサーバー側で暗号化されます。データベースを直接見ても内容は読めません。",
+    "services.sec_decrypt": "復号するのは、エージェントが実際にそのサイトへログインする瞬間だけです。AI へのプロンプトにパスワードが載ることはありません。",
+    "services.sec_canvas": "<strong>Canvas はここに登録しないでください。</strong> Chrome 拡張機能があなたのログイン済みセッションをそのまま使います。",
+    "services.sec_readonly": "エージェントは資料の取得だけを行い、提出・送信・購入は行いません。",
+
+    "plans.title": "クレジットをチャージ",
+    "plans.subtitle": "チャージした分だけ AI を使えます。使った分は実際のコストで差し引かれます。",
+    "plans.balance_now": "現在の残高",
+    "plans.credit_amount": "→ ${amount} 分のクレジット",
+    "plans.browse": "ブラウザ操作",
+    "plans.charge_btn": "チャージする",
+    "plans.mock_note": "現在は決済モックです。実際の請求は発生しません。",
+    "plans.popular": "人気",
+    "plans.blurb_basic": "まずは試す。ノート作成 100 回ぶんくらい。",
+    "plans.blurb_standard": "毎週の課題ドラフト・クイズ支援まで。+10% ボーナス。",
+    "plans.blurb_pro": "Claude 優先で高精度。使い切らない量。+20% ボーナス。",
+
+    "notes.title": "ノート一覧",
+    "notes.subtitle": "科目ごとに生成したノート・課題ドラフト・クイズ回答をまとめて見られます。",
+    "notes.count": "{count} 件",
+    "notes.uncategorized": "未分類",
+    "notes.empty_library": "まだノートがありません。ダッシュボードからノート作成 / 課題ドラフト / クイズ回答を実行すると、ここに表示されます。",
+    "notes.back_to_library": "← ノート一覧に戻る",
+    "notes.empty_course": "まだノートがありません。",
+    "notes.kind_notes": "ノート",
+    "notes.kind_draft": "課題ドラフト",
+    "notes.kind_quiz": "クイズ回答",
+    "notes.kind_syllabus": "シラバス",
+    "notes.kind_assignments": "課題一覧",
+    "notes.kind_resource": "資料",
+    "notes.kind_practice_answer": "練習問題の解答",
+
+    "flash.need_email_username": "メールアドレスとユーザー名を入力してください。",
+    "flash.bad_code": "コードが正しくないか、期限切れです。",
+    "flash.no_account": "そのメールアドレスのアカウントが見つかりません。",
+    "flash.need_name": "呼び方を入力してください。",
+    "flash.file_missing": "ファイルを選択してください。",
+    "flash.course_missing": "科目が見つかりません。",
+    "flash.note_missing": "ファイルが見つかりません。",
+    "flash.no_credit": "クレジット残高がありません。チャージしてから実行してください。",
+    "flash.payment_failed": "決済に失敗しました。",
+    "flash.unknown_plan": "不明なプランです。",
+    "flash.charged": "${amount} をチャージしました(残高 ${balance})。",
+    "flash.no_crypto_key": "サーバーに CREDENTIAL_KEY が設定されていないため、パスワードを安全に保存できません。管理者に連絡してください。",
+    "flash.cred_fields_required": "サイト名・URL・ユーザー名・パスワードをすべて入力してください。",
+    "flash.cred_saved": "{label} のログイン情報を保存しました。",
+    "flash.cred_deleted": "ログイン情報を削除しました。",
+    "flash.transcript_missing": "成績表の .html ファイルを選択してください。",
+    "flash.transcript_imported": "{count} 件の履修を取り込みました({terms})。",
+    "flash.units_numeric": "単位数は数値で入力してください。",
+    "flash.manual_fields_required": "学期・科目コード・単位数・成績を入力してください。",
+    "flash.manual_added": "{code} を追加しました。",
+    "flash.error": "エラー: {message}",
+}
+
+# --------------------------------------------------------------- 中文(简体)
+TRANSLATIONS["zh"] = {
+    "brand.tagline": "更聪明地学习，而不是更辛苦",
+    "nav.status": "状态",
+    "nav.notes": "笔记",
+    "nav.academic": "学业",
+    "nav.services": "关联服务",
+    "nav.credit": "充值",
+    "nav.logout": "退出登录",
+    "nav.language": "语言",
+    "common.save": "保存",
+    "common.delete": "删除",
+    "common.add": "添加",
+    "common.upload": "上传",
+    "common.run": "执行",
+    "common.download": "下载",
+    "common.none": "—",
+    "common.optional": "可选",
+    "common.unused": "尚未使用",
+    "common.back": "返回",
+
+    "signup.tagline": "把教材整理成笔记、起草练习题、跟进 Canvas 作业。<br>系统会根据任务自动选择最合适的 AI。",
+    "signup.email": "电子邮箱",
+    "signup.username": "用户名",
+    "signup.send_code": "发送验证码",
+    "signup.have_account": "已经有账号了？",
+    "signup.login_link": "登录",
+
+    "login.title": "登录",
+    "login.subtitle": "我们会向你注册的邮箱发送验证码。",
+    "login.no_account": "还没有账号？",
+    "login.signup_link": "注册",
+
+    "verify.title": "验证邮箱",
+    "verify.subtitle": "请输入收到的 6 位验证码。",
+    "verify.dev_mode": "开发模式：邮件发送尚未接入，验证码直接显示在这里 →",
+    "verify.submit": "验证并登录",
+
+    "onboarding.title": "欢迎",
+    "onboarding.subtitle": "先了解几件事，之后都可以修改。",
+    "onboarding.name_q": "希望我们怎么称呼你？",
+    "onboarding.school": "学校",
+    "onboarding.major": "专业",
+    "onboarding.classes": "本学期的课程（每行一个）",
+    "onboarding.start": "开始使用",
+
+    "dashboard.title": "状态",
+    "dashboard.term_quarter": "学季制",
+    "dashboard.term_semester": "学期制",
+    "dashboard.balance_label": "余额",
+    "dashboard.balance_topup": "＋ 充值",
+    "dashboard.balance_usage": "本周期执行 {count} 次 · 已用 ${cost}",
+    "dashboard.balance_empty": "余额不足。充值后即可执行 AI 任务。",
+    "dashboard.courses": "课程",
+    "dashboard.notes_link": "全部笔记 →",
+    "dashboard.no_courses": "还没有课程。请连接 Chrome 扩展，或在下方执行任务时填写课程名称。",
+    "dashboard.shortcut_academic": "学业 / GPA",
+    "dashboard.shortcut_academic_sub": "导入成绩单，查看距离毕业的学分进度",
+    "dashboard.shortcut_services": "关联服务",
+    "dashboard.shortcut_services_sub": "保存课程所需网站的登录信息",
+    "dashboard.shortcut_services_count": "已保存 {count} 个网站",
+    "dashboard.shortcut_planner_sub": "制定选课计划（外部网站）",
+    "dashboard.ext_title": "Chrome 扩展关联",
+    "dashboard.ext_hint": "重新签发后，原有的令牌会失效。",
+    "dashboard.ext_issue": "签发新令牌",
+    "dashboard.ext_issued": "令牌已签发。可以点击下方按钮自动连接扩展，或手动把该值粘贴到扩展弹窗中（此值仅显示这一次）。",
+    "dashboard.ext_connect": "自动连接扩展",
+    "dashboard.ext_manual": "手动输入用令牌：",
+    "dashboard.ext_prompt_id": "请输入 chrome://extensions 中显示的该扩展的 ID：",
+    "dashboard.ext_no_auto": "无法从此页面自动连接。请手动粘贴令牌。",
+    "dashboard.ext_no_id": "尚未输入扩展 ID。",
+    "dashboard.ext_fail": "连接失败：",
+    "dashboard.ext_check_id": "（请确认扩展 ID）",
+    "dashboard.ext_success": "已连接到扩展。",
+    "dashboard.tasks_title": "执行任务",
+    "dashboard.task_notes": "生成笔记",
+    "dashboard.task_notes_hint": "教材、讲义 → 结构化笔记",
+    "dashboard.task_draft": "作业草稿",
+    "dashboard.task_draft_hint": "练习题 → 解答草稿与讲解",
+    "dashboard.task_quiz": "解答测验",
+    "dashboard.task_quiz_hint": "以本周笔记为依据作答",
+    "dashboard.course_select": "选择课程（可选）",
+    "dashboard.no_credit_hint": "余额不足，无法执行。请先",
+    "dashboard.no_credit_link": "充值",
+
+    "academic.title": "学业",
+    "academic.grad_units": "毕业需要 {units} 学分",
+    "academic.official_note": "GPA 与学分为成绩单上的官方数值。",
+    "academic.gpa_label": "累计 GPA",
+    "academic.units_earned": "已获学分",
+    "academic.remaining": "距毕业还需",
+    "academic.gpa_units": "计入 GPA 的学分",
+    "academic.progress": "{earned} / {goal} 学分（{pct}%）",
+    "academic.planner_btn": "在 {planner} 中制定选课计划 →",
+    "academic.planner_note": "课程的先后安排在 {planner} 中管理。",
+    "academic.step_login": "登录 Student Access",
+    "academic.step_open": "打开「Unofficial Transcript」",
+    "academic.step_save": "保存网页（⌘S / Ctrl+S）→ 会生成 .html 文件",
+    "academic.step_upload": "把该 .html 文件上传到这里",
+    "academic.upload_title": "导入成绩单",
+    "academic.last_upload": "最近上传：{date}",
+    "academic.reupload_note": "重新上传会替换上次导入的记录（手动添加的课程会保留）。",
+    "academic.term_summary": "GPA {gpa} · {units} 学分",
+    "academic.col_course": "课程",
+    "academic.col_title": "名称",
+    "academic.col_units": "学分",
+    "academic.col_grade": "成绩",
+    "academic.no_data": "还没有导入成绩单。请在上方上传，或在下方手动添加课程。",
+    "academic.manual_title": "手动添加课程",
+    "academic.manual_note": "当成绩单无法自动解析时使用。",
+    "academic.manual_term": "学期",
+
+    "services.title": "关联服务",
+    "services.subtitle": "保存课程所需网站的登录信息后，助手就能自行登录获取资料。",
+    "services.no_key_warning": "服务器未设置 <code>CREDENTIAL_KEY</code>，无法加密保存密码。在管理员完成设置之前无法添加新的登录信息。",
+    "services.registered": "已保存的网站",
+    "services.col_site": "网站",
+    "services.col_user": "用户名",
+    "services.col_course": "课程",
+    "services.col_last_used": "最近使用",
+    "services.pw_note": "密码以加密形式保存，无法显示。如需修改，请用相同的 URL 重新保存。",
+    "services.empty": "还没有保存任何网站。",
+    "services.add_title": "添加网站",
+    "services.label": "网站名称",
+    "services.url": "网址",
+    "services.username": "用户名 / 邮箱",
+    "services.password": "密码",
+    "services.course": "相关课程（可选）",
+    "services.course_none": "不指定",
+    "services.confirm_delete": "确定要删除 {label} 的登录信息吗？",
+    "services.security_title": "关于安全",
+    "services.sec_encrypted": "密码在保存前会由服务器加密，直接查看数据库也无法读取内容。",
+    "services.sec_decrypt": "只有在助手实际登录该网站的那一刻才会解密。密码绝不会出现在发送给 AI 的提示中。",
+    "services.sec_canvas": "<strong>请勿在此添加 Canvas。</strong> Chrome 扩展会直接使用你已登录的会话。",
+    "services.sec_readonly": "助手只负责获取资料，绝不会提交、发送或购买任何内容。",
+
+    "plans.title": "充值",
+    "plans.subtitle": "充值多少就能用多少。每次执行会按实际成本扣费。",
+    "plans.balance_now": "当前余额",
+    "plans.credit_amount": "→ 获得 ${amount} 额度",
+    "plans.browse": "浏览器操作",
+    "plans.charge_btn": "立即充值",
+    "plans.mock_note": "目前为模拟支付，不会产生实际扣款。",
+    "plans.popular": "热门",
+    "plans.blurb_basic": "先试试看。大约可生成 100 次笔记。",
+    "plans.blurb_standard": "涵盖每周作业草稿与测验辅助。赠送 10%。",
+    "plans.blurb_pro": "优先使用 Claude，精度更高，用量充足。赠送 20%。",
+
+    "notes.title": "笔记",
+    "notes.subtitle": "按课程汇总查看生成的笔记、作业草稿和测验答案。",
+    "notes.count": "{count} 项",
+    "notes.uncategorized": "未分类",
+    "notes.empty_library": "还没有笔记。在仪表盘执行生成笔记 / 作业草稿 / 解答测验后，结果会显示在这里。",
+    "notes.back_to_library": "← 返回笔记列表",
+    "notes.empty_course": "还没有笔记。",
+    "notes.kind_notes": "笔记",
+    "notes.kind_draft": "作业草稿",
+    "notes.kind_quiz": "测验答案",
+    "notes.kind_syllabus": "教学大纲",
+    "notes.kind_assignments": "作业列表",
+    "notes.kind_resource": "资料",
+    "notes.kind_practice_answer": "练习题解答",
+
+    "flash.need_email_username": "请输入电子邮箱和用户名。",
+    "flash.bad_code": "验证码不正确或已过期。",
+    "flash.no_account": "找不到使用该邮箱的账号。",
+    "flash.need_name": "请填写希望我们对你的称呼。",
+    "flash.file_missing": "请选择文件。",
+    "flash.course_missing": "找不到该课程。",
+    "flash.note_missing": "找不到文件。",
+    "flash.no_credit": "余额不足。请先充值再执行任务。",
+    "flash.payment_failed": "支付失败。",
+    "flash.unknown_plan": "未知的套餐。",
+    "flash.charged": "已充值 ${amount}（余额 ${balance}）。",
+    "flash.no_crypto_key": "服务器未设置 CREDENTIAL_KEY，无法安全保存密码。请联系管理员。",
+    "flash.cred_fields_required": "请完整填写网站名称、网址、用户名和密码。",
+    "flash.cred_saved": "已保存 {label} 的登录信息。",
+    "flash.cred_deleted": "登录信息已删除。",
+    "flash.transcript_missing": "请选择成绩单的 .html 文件。",
+    "flash.transcript_imported": "已导入 {count} 门课程（{terms}）。",
+    "flash.units_numeric": "学分请填写数字。",
+    "flash.manual_fields_required": "请填写学期、课程代码、学分和成绩。",
+    "flash.manual_added": "已添加 {code}。",
+    "flash.error": "错误：{message}",
+}
+
+# --------------------------------------------------------------- 한국어
+TRANSLATIONS["ko"] = {
+    "brand.tagline": "더 열심히보다, 더 똑똑하게",
+    "nav.status": "상태",
+    "nav.notes": "노트",
+    "nav.academic": "학업",
+    "nav.services": "연동",
+    "nav.credit": "충전",
+    "nav.logout": "로그아웃",
+    "nav.language": "언어",
+    "common.save": "저장",
+    "common.delete": "삭제",
+    "common.add": "추가",
+    "common.upload": "업로드",
+    "common.run": "실행",
+    "common.download": "다운로드",
+    "common.none": "—",
+    "common.optional": "선택",
+    "common.unused": "사용 안 함",
+    "common.back": "뒤로",
+
+    "signup.tagline": "교재로 노트를 만들고, 연습 문제 초안을 쓰고, Canvas 과제를 챙깁니다.<br>작업에 따라 가장 적합한 AI로 자동 배분됩니다.",
+    "signup.email": "이메일 주소",
+    "signup.username": "사용자 이름",
+    "signup.send_code": "인증 코드 보내기",
+    "signup.have_account": "이미 계정이 있으신가요?",
+    "signup.login_link": "로그인",
+
+    "login.title": "로그인",
+    "login.subtitle": "등록된 이메일 주소로 인증 코드를 보내드립니다.",
+    "login.no_account": "아직 계정이 없으신가요?",
+    "login.signup_link": "회원가입",
+
+    "verify.title": "이메일 인증",
+    "verify.subtitle": "전송된 6자리 코드를 입력하세요.",
+    "verify.dev_mode": "개발 모드: 이메일 발송이 연결되지 않아 코드를 여기에 표시합니다 →",
+    "verify.submit": "인증하고 계속하기",
+
+    "onboarding.title": "환영합니다",
+    "onboarding.subtitle": "몇 가지만 알려주세요. 나중에 변경할 수 있습니다.",
+    "onboarding.name_q": "어떻게 불러드릴까요?",
+    "onboarding.school": "학교",
+    "onboarding.major": "전공",
+    "onboarding.classes": "이번 학기 과목 (한 줄에 하나씩)",
+    "onboarding.start": "시작하기",
+
+    "dashboard.title": "상태",
+    "dashboard.term_quarter": "쿼터제",
+    "dashboard.term_semester": "학기제",
+    "dashboard.balance_label": "크레딧 잔액",
+    "dashboard.balance_topup": "＋ 충전",
+    "dashboard.balance_usage": "이번 주기 {count}회 실행 · ${cost} 사용",
+    "dashboard.balance_empty": "잔액이 없습니다. 충전하면 AI 작업을 실행할 수 있습니다.",
+    "dashboard.courses": "과목",
+    "dashboard.notes_link": "전체 노트 →",
+    "dashboard.no_courses": "아직 과목이 없습니다. Chrome 확장 프로그램을 연결하거나, 아래에서 작업을 실행할 때 과목명을 입력하세요.",
+    "dashboard.shortcut_academic": "학업 / GPA",
+    "dashboard.shortcut_academic_sub": "성적표를 가져와 졸업 학점까지의 진행 상황 확인",
+    "dashboard.shortcut_services": "연동 서비스",
+    "dashboard.shortcut_services_sub": "수업에 쓰는 사이트의 로그인 정보 저장",
+    "dashboard.shortcut_services_count": "{count}개 사이트 등록됨",
+    "dashboard.shortcut_planner_sub": "수강 계획 세우기 (외부 사이트)",
+    "dashboard.ext_title": "Chrome 확장 프로그램 연동",
+    "dashboard.ext_hint": "새로 발급하면 기존 토큰은 무효가 됩니다.",
+    "dashboard.ext_issue": "새 토큰 발급",
+    "dashboard.ext_issued": "토큰을 발급했습니다. 아래 버튼으로 확장 프로그램에 자동 연결하거나, 표시된 값을 팝업에 직접 붙여넣으세요 (이 값은 지금만 표시됩니다).",
+    "dashboard.ext_connect": "확장 프로그램에 자동 연결",
+    "dashboard.ext_manual": "수동 입력용 토큰:",
+    "dashboard.ext_prompt_id": "chrome://extensions에 표시된 확장 프로그램 ID를 입력하세요:",
+    "dashboard.ext_no_auto": "이 화면에서는 자동 연결할 수 없습니다. 토큰을 직접 붙여넣으세요.",
+    "dashboard.ext_no_id": "확장 프로그램 ID가 입력되지 않았습니다.",
+    "dashboard.ext_fail": "연결 실패:",
+    "dashboard.ext_check_id": "(확장 프로그램 ID를 확인하세요)",
+    "dashboard.ext_success": "확장 프로그램에 연결했습니다.",
+    "dashboard.tasks_title": "작업 실행",
+    "dashboard.task_notes": "노트 만들기",
+    "dashboard.task_notes_hint": "교재·슬라이드 → 구조화된 노트",
+    "dashboard.task_draft": "과제 초안",
+    "dashboard.task_draft_hint": "연습 문제 → 답안 초안과 해설",
+    "dashboard.task_quiz": "퀴즈 답변",
+    "dashboard.task_quiz_hint": "그 주의 노트를 근거로 답변",
+    "dashboard.course_select": "과목 선택 (선택 사항)",
+    "dashboard.no_credit_hint": "크레딧 잔액이 없어 실행할 수 없습니다. 먼저",
+    "dashboard.no_credit_link": "충전",
+
+    "academic.title": "학업",
+    "academic.grad_units": "졸업 요건 {units}학점",
+    "academic.official_note": "GPA와 학점은 성적표에 기재된 공식 값입니다.",
+    "academic.gpa_label": "누적 GPA",
+    "academic.units_earned": "취득 학점",
+    "academic.remaining": "졸업까지 남은 학점",
+    "academic.gpa_units": "GPA 반영 학점",
+    "academic.progress": "{earned} / {goal}학점 ({pct}%)",
+    "academic.planner_btn": "{planner}에서 수강 계획 세우기 →",
+    "academic.planner_note": "졸업까지의 과목 배치는 {planner}에서 관리합니다.",
+    "academic.step_login": "Student Access에 로그인합니다",
+    "academic.step_open": "「Unofficial Transcript」를 엽니다",
+    "academic.step_save": "페이지를 저장합니다 (⌘S / Ctrl+S) → .html 파일이 생성됩니다",
+    "academic.step_upload": "그 .html 파일을 여기에 업로드합니다",
+    "academic.upload_title": "성적표 가져오기",
+    "academic.last_upload": "마지막 업로드: {date}",
+    "academic.reupload_note": "다시 업로드하면 이전에 가져온 기록이 교체됩니다 (직접 입력한 과목은 유지됩니다).",
+    "academic.term_summary": "GPA {gpa} · {units}학점",
+    "academic.col_course": "과목",
+    "academic.col_title": "과목명",
+    "academic.col_units": "학점",
+    "academic.col_grade": "성적",
+    "academic.no_data": "아직 성적표를 가져오지 않았습니다. 위에서 업로드하거나 아래에서 직접 입력하세요.",
+    "academic.manual_title": "직접 과목 추가",
+    "academic.manual_note": "성적표 자동 분석이 잘 되지 않을 때 사용하세요.",
+    "academic.manual_term": "학기",
+
+    "services.title": "연동 서비스",
+    "services.subtitle": "수업에 쓰는 사이트의 로그인 정보를 저장해 두면, 에이전트가 직접 로그인해 자료를 가져옵니다.",
+    "services.no_key_warning": "서버에 <code>CREDENTIAL_KEY</code>가 설정되지 않아 비밀번호를 암호화해 저장할 수 없습니다. 관리자가 설정할 때까지 새로 등록할 수 없습니다.",
+    "services.registered": "등록된 사이트",
+    "services.col_site": "사이트",
+    "services.col_user": "사용자 이름",
+    "services.col_course": "과목",
+    "services.col_last_used": "마지막 사용",
+    "services.pw_note": "비밀번호는 암호화되어 저장되므로 표시할 수 없습니다. 변경하려면 같은 URL로 다시 저장하세요.",
+    "services.empty": "아직 등록된 사이트가 없습니다.",
+    "services.add_title": "사이트 추가",
+    "services.label": "사이트 이름",
+    "services.url": "URL",
+    "services.username": "사용자 이름 / 이메일",
+    "services.password": "비밀번호",
+    "services.course": "관련 과목 (선택 사항)",
+    "services.course_none": "지정 안 함",
+    "services.confirm_delete": "{label}의 로그인 정보를 삭제할까요?",
+    "services.security_title": "보안에 대하여",
+    "services.sec_encrypted": "비밀번호는 저장 전에 서버에서 암호화됩니다. 데이터베이스를 직접 봐도 내용을 읽을 수 없습니다.",
+    "services.sec_decrypt": "복호화는 에이전트가 실제로 그 사이트에 로그인하는 순간에만 이루어집니다. 비밀번호가 AI 프롬프트에 포함되는 일은 없습니다.",
+    "services.sec_canvas": "<strong>Canvas는 여기에 등록하지 마세요.</strong> Chrome 확장 프로그램이 이미 로그인된 세션을 그대로 사용합니다.",
+    "services.sec_readonly": "에이전트는 자료를 가져오기만 하며, 제출·전송·구매는 하지 않습니다.",
+
+    "plans.title": "크레딧 충전",
+    "plans.subtitle": "충전한 만큼 AI를 사용할 수 있습니다. 사용한 만큼 실제 비용이 차감됩니다.",
+    "plans.balance_now": "현재 잔액",
+    "plans.credit_amount": "→ ${amount} 상당의 크레딧",
+    "plans.browse": "브라우저 조작",
+    "plans.charge_btn": "충전하기",
+    "plans.mock_note": "현재는 결제 목업입니다. 실제로 청구되지 않습니다.",
+    "plans.popular": "인기",
+    "plans.blurb_basic": "우선 사용해 보기. 노트 작성 약 100회 분량.",
+    "plans.blurb_standard": "매주 과제 초안과 퀴즈 지원까지. +10% 보너스.",
+    "plans.blurb_pro": "Claude 우선으로 높은 정확도. 넉넉한 사용량. +20% 보너스.",
+
+    "notes.title": "노트",
+    "notes.subtitle": "과목별로 생성한 노트·과제 초안·퀴즈 답변을 모아서 볼 수 있습니다.",
+    "notes.count": "{count}건",
+    "notes.uncategorized": "미분류",
+    "notes.empty_library": "아직 노트가 없습니다. 대시보드에서 노트 만들기 / 과제 초안 / 퀴즈 답변을 실행하면 여기에 표시됩니다.",
+    "notes.back_to_library": "← 노트 목록으로 돌아가기",
+    "notes.empty_course": "아직 노트가 없습니다.",
+    "notes.kind_notes": "노트",
+    "notes.kind_draft": "과제 초안",
+    "notes.kind_quiz": "퀴즈 답변",
+    "notes.kind_syllabus": "실러버스",
+    "notes.kind_assignments": "과제 목록",
+    "notes.kind_resource": "자료",
+    "notes.kind_practice_answer": "연습 문제 답안",
+
+    "flash.need_email_username": "이메일 주소와 사용자 이름을 입력하세요.",
+    "flash.bad_code": "코드가 올바르지 않거나 만료되었습니다.",
+    "flash.no_account": "해당 이메일 주소의 계정을 찾을 수 없습니다.",
+    "flash.need_name": "어떻게 불러드릴지 입력해 주세요.",
+    "flash.file_missing": "파일을 선택하세요.",
+    "flash.course_missing": "과목을 찾을 수 없습니다.",
+    "flash.note_missing": "파일을 찾을 수 없습니다.",
+    "flash.no_credit": "크레딧 잔액이 없습니다. 충전한 후 실행하세요.",
+    "flash.payment_failed": "결제에 실패했습니다.",
+    "flash.unknown_plan": "알 수 없는 플랜입니다.",
+    "flash.charged": "${amount}를 충전했습니다 (잔액 ${balance}).",
+    "flash.no_crypto_key": "서버에 CREDENTIAL_KEY가 설정되지 않아 비밀번호를 안전하게 저장할 수 없습니다. 관리자에게 문의하세요.",
+    "flash.cred_fields_required": "사이트 이름·URL·사용자 이름·비밀번호를 모두 입력하세요.",
+    "flash.cred_saved": "{label}의 로그인 정보를 저장했습니다.",
+    "flash.cred_deleted": "로그인 정보를 삭제했습니다.",
+    "flash.transcript_missing": "성적표 .html 파일을 선택하세요.",
+    "flash.transcript_imported": "{count}개 과목을 가져왔습니다 ({terms}).",
+    "flash.units_numeric": "학점은 숫자로 입력하세요.",
+    "flash.manual_fields_required": "학기·과목 코드·학점·성적을 입력하세요.",
+    "flash.manual_added": "{code}을(를) 추가했습니다.",
+    "flash.error": "오류: {message}",
+}
+
+
+def normalize(code: str | None) -> str | None:
+    """"ja-JP" や "zh-CN" のような表記を、対応している言語コードに寄せる。
+
+    対応外なら None(呼び出し側が次の候補を試せるように)。
+    """
+    if not code:
+        return None
+    base = code.strip().lower().replace("_", "-").split("-")[0]
+    return base if base in LANGUAGES else None
+
+
+def from_accept_language(header: str | None) -> str | None:
+    """ブラウザの Accept-Language ヘッダから、対応している最初の言語を選ぶ。
+
+    "ja,en-US;q=0.9" のような形式。q 値の順序は概ね記載順なので、
+    そのまま前から見ていく。
+    """
+    if not header:
+        return None
+    for part in header.split(","):
+        lang = normalize(part.split(";")[0])
+        if lang:
+            return lang
+    return None
+
+
+def get_locale() -> str:
+    """今のリクエストで使う言語コードを返す。
+
+    app.py の before_request が g.lang に入れた値を使う。リクエスト外
+    (テストなど)から呼ばれたときは既定の英語。
+    """
+    if has_request_context():
+        lang = getattr(g, "lang", None)
+        if lang in LANGUAGES:
+            return lang
+        lang = normalize(session.get("lang"))
+        if lang:
+            return lang
+        lang = from_accept_language(request.headers.get("Accept-Language"))
+        if lang:
+            return lang
+    return DEFAULT_LANG
+
+
+def t(key: str, **kwargs) -> str:
+    """キーを今の言語の文字列に変換する。
+
+    見つからないときは英語 → キーそのもの、の順にフォールバックするので、
+    翻訳が抜けていても画面は必ず何かを表示する(空白にはならない)。
+    """
+    lang = get_locale()
+    text = TRANSLATIONS.get(lang, {}).get(key)
+    if text is None:
+        text = TRANSLATIONS[DEFAULT_LANG].get(key, key)
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except (KeyError, IndexError):
+            # 置換名が合わなくても落とさない(素の文字列を返す)
+            return text
+    return text
+
+
+def ai_output_lang(lang: str | None = None) -> str:
+    """AI にノート等を書かせるときの出力言語名。画面の言語に合わせる。"""
+    return AI_OUTPUT_LANG.get(lang or get_locale(), AI_OUTPUT_LANG[DEFAULT_LANG])

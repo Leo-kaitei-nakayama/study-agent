@@ -6,9 +6,10 @@
       学生には意味がないので表示しない(plans.py のコメント参照)。
     - 科目はチップの羅列ではなくカードのグリッドにして、ノート件数も出す。
     - タスク実行フォームは 3 列固定をやめ、幅が足りなければ折り返す。
+    - 文字列はすべて t() 経由(実体は webapp/i18n.py)。
 #}
 {% extends "base.html" %}
-{% block title %}ステータス — Study Agent{% endblock %}
+{% block title %}{{ t('dashboard.title') }} — Study Agent{% endblock %}
 {% block content %}
 
 {# ------------------------------------------------ プロフィール + 残高 #}
@@ -19,47 +20,45 @@
       <div class="name">{{ profile.preferred_name }}</div>
       <div class="sub">
         {{ profile.school or school.short }}
-        {%- if profile.major %} ・ {{ profile.major }}{% endif %}
-        ・ {{ "クォーター制" if school.term_system == "quarter" else "セメスター制" }}
+        {%- if profile.major %} · {{ profile.major }}{% endif %}
+        · {{ t('dashboard.term_quarter') if school.term_system == 'quarter' else t('dashboard.term_semester') }}
       </div>
     </div>
   </div>
 
   <div class="balance-card {% if balance <= 0 %}is-empty{% endif %}">
     <div>
-      <div class="balance-label">クレジット残高</div>
+      <div class="balance-label">{{ t('dashboard.balance_label') }}</div>
       <div class="balance-value">${{ "%.2f"|format(balance) }}</div>
       <div class="balance-sub">
         {% if balance > 0 %}
-          今サイクル {{ usage_count }} 回実行 ・ 使用額 ${{ "%.2f"|format(cost) }}
+          {{ t('dashboard.balance_usage', count=usage_count, cost="%.2f"|format(cost)) }}
         {% else %}
-          残高がありません。チャージすると AI タスクを実行できます。
+          {{ t('dashboard.balance_empty') }}
         {% endif %}
       </div>
     </div>
-    <a class="btn btn-primary" href="{{ url_for('plans') }}">＋ チャージ</a>
+    <a class="btn btn-primary" href="{{ url_for('plans') }}">{{ t('dashboard.balance_topup') }}</a>
   </div>
 </div>
 
 {# ------------------------------------------------ 科目 #}
 <div class="card">
   <div class="card-head">
-    <h2 class="card-title">科目</h2>
-    <a class="card-link" href="{{ url_for('notes_library') }}">ノート一覧 →</a>
+    <h2 class="card-title">{{ t('dashboard.courses') }}</h2>
+    <a class="card-link" href="{{ url_for('notes_library') }}">{{ t('dashboard.notes_link') }}</a>
   </div>
   {% if courses %}
   <div class="course-grid">
     {% for c in courses %}
     <a class="course-card" href="{{ url_for('notes_course', course_id=c.id) }}">
       <span class="course-name">{{ c.name }}</span>
-      <span class="course-count">{{ counts.get(c.id, 0) }} 件</span>
+      <span class="course-count">{{ t('notes.count', count=counts.get(c.id, 0)) }}</span>
     </a>
     {% endfor %}
   </div>
   {% else %}
-  <p class="empty-state">
-    まだ科目がありません。Chrome 拡張機能を接続するか、下のタスク実行時に科目名を入れると登録されます。
-  </p>
+  <p class="empty-state">{{ t('dashboard.no_courses') }}</p>
   {% endif %}
 </div>
 
@@ -67,42 +66,54 @@
 <div class="shortcut-grid">
   <a class="shortcut-card" href="{{ url_for('academic') }}">
     <span class="shortcut-icon">🎓</span>
-    <span class="shortcut-title">学業 / GPA</span>
-    <span class="shortcut-sub">成績表を取り込んで卒業単位までの進捗を見る</span>
+    <span class="shortcut-title">{{ t('dashboard.shortcut_academic') }}</span>
+    <span class="shortcut-sub">{{ t('dashboard.shortcut_academic_sub') }}</span>
   </a>
   <a class="shortcut-card" href="{{ url_for('services') }}">
     <span class="shortcut-icon">🔗</span>
-    <span class="shortcut-title">連携サービス</span>
+    <span class="shortcut-title">{{ t('dashboard.shortcut_services') }}</span>
     <span class="shortcut-sub">
-      {% if credentials %}{{ credentials|length }} サイト登録済み{% else %}授業で使うサイトのログインを登録{% endif %}
+      {%- if credentials -%}
+        {{ t('dashboard.shortcut_services_count', count=credentials|length) }}
+      {%- else -%}
+        {{ t('dashboard.shortcut_services_sub') }}
+      {%- endif -%}
     </span>
   </a>
   <a class="shortcut-card" href="{{ school.planner_url }}" target="_blank" rel="noopener">
     <span class="shortcut-icon">🗓️</span>
     <span class="shortcut-title">{{ school.planner_name }}</span>
-    <span class="shortcut-sub">履修計画を立てる（外部サイト）</span>
+    <span class="shortcut-sub">{{ t('dashboard.shortcut_planner_sub') }}</span>
   </a>
 </div>
 
 {# ------------------------------------------------ Chrome 拡張機能 #}
 <div class="card">
   <div class="card-head">
-    <h2 class="card-title">Chrome 拡張機能との連携</h2>
+    <h2 class="card-title">{{ t('dashboard.ext_title') }}</h2>
   </div>
 
   {% if new_extension_token %}
-  <p class="fine-print">
-    トークンを発行しました。下のボタンで拡張機能に自動接続するか、表示された値を手動でポップアップに貼り付けてください（この値は今しか表示されません）。
-  </p>
+  <p class="fine-print">{{ t('dashboard.ext_issued') }}</p>
   <div id="ext-status" class="ext-status"></div>
-  <button class="btn" type="button" onclick="connectExtension()">拡張機能に自動接続</button>
-  <p class="token-display">手動用トークン: <code>{{ new_extension_token }}</code></p>
+  <button class="btn" type="button" onclick="connectExtension()">{{ t('dashboard.ext_connect') }}</button>
+  <p class="token-display">{{ t('dashboard.ext_manual') }} <code>{{ new_extension_token }}</code></p>
   <script>
+    // 画面に出す文言はサーバー側で翻訳済みのものを埋め込む(JS 側に辞書を持たない)
+    const EXT_MSG = {
+      promptId: {{ t('dashboard.ext_prompt_id')|tojson }},
+      noAuto:   {{ t('dashboard.ext_no_auto')|tojson }},
+      noId:     {{ t('dashboard.ext_no_id')|tojson }},
+      fail:     {{ t('dashboard.ext_fail')|tojson }},
+      checkId:  {{ t('dashboard.ext_check_id')|tojson }},
+      success:  {{ t('dashboard.ext_success')|tojson }}
+    };
+
     // 拡張機能 ID はブラウザごとに違うので、初回だけ聞いて localStorage に覚えておく。
     function getExtensionId() {
       let id = localStorage.getItem("sa_extension_id");
       if (!id) {
-        id = prompt("chrome://extensions で表示されるこの拡張機能のIDを入力してください:");
+        id = prompt(EXT_MSG.promptId);
         if (id) localStorage.setItem("sa_extension_id", id.trim());
       }
       return id;
@@ -110,27 +121,27 @@
     function connectExtension() {
       const statusEl = document.getElementById("ext-status");
       if (!window.chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
-        statusEl.textContent = "この画面からは自動接続できません。手動でトークンを貼り付けてください。";
+        statusEl.textContent = EXT_MSG.noAuto;
         return;
       }
       const extId = getExtensionId();
-      if (!extId) { statusEl.textContent = "拡張機能IDが未入力です。"; return; }
-      chrome.runtime.sendMessage(extId, { action: "connectToken", token: "{{ new_extension_token }}" },
+      if (!extId) { statusEl.textContent = EXT_MSG.noId; return; }
+      chrome.runtime.sendMessage(extId, { action: "connectToken", token: {{ new_extension_token|tojson }} },
         (res) => {
           if (chrome.runtime.lastError) {
-            statusEl.textContent = "接続失敗: " + chrome.runtime.lastError.message + "（拡張機能IDを確認してください）";
+            statusEl.textContent = EXT_MSG.fail + " " + chrome.runtime.lastError.message + " " + EXT_MSG.checkId;
           } else if (res && res.ok) {
-            statusEl.textContent = "✅ 拡張機能に自動接続しました";
+            statusEl.textContent = "✅ " + EXT_MSG.success;
           } else {
-            statusEl.textContent = "接続失敗: " + (res && res.error);
+            statusEl.textContent = EXT_MSG.fail + " " + (res && res.error);
           }
         });
     }
   </script>
   {% else %}
-  <p class="fine-print">発行すると既存のトークンは失効します。</p>
+  <p class="fine-print">{{ t('dashboard.ext_hint') }}</p>
   <form method="post" action="{{ url_for('generate_extension_token') }}">
-    <button class="btn" type="submit">新しいトークンを発行</button>
+    <button class="btn" type="submit">{{ t('dashboard.ext_issue') }}</button>
   </form>
   {% endif %}
 </div>
@@ -138,35 +149,38 @@
 {# ------------------------------------------------ タスク実行 #}
 <div class="card">
   <div class="card-head">
-    <h2 class="card-title">タスクを実行</h2>
+    <h2 class="card-title">{{ t('dashboard.tasks_title') }}</h2>
   </div>
   <div class="action-grid">
     {% for task in [
-        {"url": url_for('task_notes'), "icon": "📝", "name": "ノート作成",
-         "hint": "教科書・スライド → 構造化ノート"},
-        {"url": url_for('task_draft'), "icon": "✍️", "name": "課題ドラフト",
-         "hint": "練習課題 → 解答ドラフト + 解説"},
-        {"url": url_for('task_quiz'), "icon": "❓", "name": "クイズ回答",
-         "hint": "その週のノートを根拠に回答"}] %}
+        {"url": url_for('task_notes'), "icon": "📝", "name": t('dashboard.task_notes'),
+         "hint": t('dashboard.task_notes_hint')},
+        {"url": url_for('task_draft'), "icon": "✍️", "name": t('dashboard.task_draft'),
+         "hint": t('dashboard.task_draft_hint')},
+        {"url": url_for('task_quiz'), "icon": "❓", "name": t('dashboard.task_quiz'),
+         "hint": t('dashboard.task_quiz_hint')}] %}
     <form class="action-card" method="post" action="{{ task.url }}" enctype="multipart/form-data">
       <div class="action-head">
         <span class="action-icon">{{ task.icon }}</span>
         <span class="action-name">{{ task.name }}</span>
       </div>
       <p class="action-hint">{{ task.hint }}</p>
-      <select name="course" aria-label="科目">
-        <option value="__none__">科目を選択（任意）</option>
+      <select name="course" aria-label="{{ t('dashboard.courses') }}">
+        <option value="__none__">{{ t('dashboard.course_select') }}</option>
         {% for c in courses %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
       </select>
       <input type="file" name="file" required>
       <button class="btn btn-primary" type="submit" {% if balance <= 0 %}disabled{% endif %}>
-        実行
+        {{ t('common.run') }}
       </button>
     </form>
     {% endfor %}
   </div>
   {% if balance <= 0 %}
-  <p class="fine-print">クレジット残高がないため実行できません。まず <a href="{{ url_for('plans') }}">チャージ</a> してください。</p>
+  <p class="fine-print">
+    {{ t('dashboard.no_credit_hint') }}
+    <a href="{{ url_for('plans') }}">{{ t('dashboard.no_credit_link') }}</a>
+  </p>
   {% endif %}
 </div>
 

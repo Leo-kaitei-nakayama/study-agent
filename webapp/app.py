@@ -15,17 +15,19 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
-from flask import (Flask, flash, redirect, render_template, request,
+from flask import (Flask, flash, g, redirect, render_template, request,
                    send_file, session, url_for)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # study_agent パッケージを見える化
 
 import crypto
 import db
+import i18n
 import mailer
 import payments
 import school as school_info
 import transcript as transcript_parser
+from i18n import t
 from plans import DEFAULT_PLAN, PLANS
 from study_agent import llm as study_llm
 
@@ -57,6 +59,48 @@ def login_required(fn):
     return wrapper
 
 
+# ------------------------------------------------------------------ 多言語
+@app.before_request
+def _resolve_language():
+    """このリクエストで使う言語を決めて g.lang に入れる。
+
+    優先順位: ?lang= → セッション → プロフィール → ブラウザ設定 → 英語。
+    i18n.t() はここで決まった g.lang を見る。
+    """
+    lang = i18n.normalize(request.args.get("lang"))
+    if not lang:
+        lang = i18n.normalize(session.get("lang"))
+    if not lang and session.get("user_id"):
+        lang = i18n.normalize(db.get_lang(session["user_id"]))
+    if not lang:
+        lang = i18n.from_accept_language(request.headers.get("Accept-Language"))
+    g.lang = lang or i18n.DEFAULT_LANG
+
+
+@app.route("/lang/<code>")
+def set_language(code):
+    """言語切り替えボタンの飛び先。切り替えたら元のページへ戻す。
+
+    ログイン済みならプロフィールにも保存するので、別の端末でも同じ言語になる。
+    """
+    lang = i18n.normalize(code)
+    if lang:
+        session["lang"] = lang
+        if session.get("user_id"):
+            db.set_lang(session["user_id"], lang)
+    # next は同一サイト内のパスだけ許可する(外部サイトへの誘導を防ぐ)
+    nxt = request.args.get("next", "")
+    if not nxt.startswith("/") or nxt.startswith("//"):
+        nxt = url_for("index")
+    return redirect(nxt)
+
+
+@app.context_processor
+def _inject_i18n():
+    """全テンプレートで t() と言語一覧を使えるようにする。"""
+    return {"t": t, "LANGUAGES": i18n.LANGUAGES, "current_lang": i18n.get_locale()}
+
+
 # --------------------------------------------------------------- auth flow
 @app.route("/")
 def index():
@@ -71,7 +115,7 @@ def signup():
         email = request.form["email"].strip().lower()
         username = request.form["username"].strip()
         if not email or not username:
-            flash("メールアドレスとユーザー名を入力してください")
+            flash(t("flash.need_email_username"))
             return render_template("signup.html")
         existing = db.get_user_by_email(email)
         user_id = existing["id"] if existing else db.create_user(email, username)
@@ -99,7 +143,7 @@ def verify():
             if not db.get_subscription(user_id):
                 return redirect(url_for("plans"))
             return redirect(url_for("dashboard"))
-        flash("コードが正しくないか、期限切れです")
+        flash(t("flash.bad_code"))
     dev_code = request.args.get("dev_code")
     return render_template("verify.html", dev_code=dev_code)
 
@@ -110,7 +154,7 @@ def login():
         email = request.form["email"].strip().lower()
         user = db.get_user_by_email(email)
         if not user:
-            flash("そのメールアドレスのアカウントが見つかりません")
+            flash(t("flash.no_account"))
             return render_template("login.html")
         code = db.issue_code(user["id"], "login")
         mailer.send_verification_code(email, code, "login")
@@ -131,7 +175,7 @@ def login_verify():
             session.pop("pending_login_user_id", None)
             session["user_id"] = user_id
             return redirect(url_for("dashboard"))
-        flash("コードが正しくないか、期限切れです")
+        flash(t("flash.bad_code"))
     dev_code = request.args.get("dev_code")
     return render_template("verify.html", dev_code=dev_code, login=True)
 
@@ -153,10 +197,12 @@ def onboarding():
         school = request.form.get("school", "").strip()
         classes_raw = request.form.get("classes", "")
         if not preferred_name:
-            flash("呼び方を入力してください")
+            flash(t("flash.need_name"))
             return render_template("onboarding.html")
 
         db.set_profile(user_id, preferred_name, major, school)
+        # ここまで選んでいた言語をプロフィールにも残す(端末を変えても保つため)
+        db.set_lang(user_id, i18n.get_locale())
         for line in classes_raw.splitlines():
             name = line.strip()
             if name:
@@ -185,7 +231,7 @@ def notes_course(course_id):
     user_id = session["user_id"]
     course = db.get_course(user_id, course_id)
     if not course:
-        flash("科目が見つかりません")
+        flash(t("flash.course_missing"))
         return redirect(url_for("notes_library"))
     notes = db.list_notes_for_course(user_id, course_id)
     return render_template("notes_course.html", course=course, notes=notes)
@@ -205,7 +251,7 @@ def notes_download(note_id):
     user_id = session["user_id"]
     row = db.get_note(user_id, note_id)
     if not row:
-        flash("ファイルが見つかりません")
+        flash(t("flash.note_missing"))
         return redirect(url_for("notes_library"))
     return send_file(OUTPUT_DIR / row["filename"], as_attachment=True,
                      download_name=row["source_name"])
@@ -462,17 +508,18 @@ def plans():
     if request.method == "POST":
         plan = request.form["plan"]
         if plan not in PLANS:
-            flash("不明なプランです")
+            flash(t("flash.unknown_plan"))
             return redirect(url_for("plans"))
         ok = payments.charge(user_id, plan, PLANS[plan]["price_usd"])
         if ok:
             db.set_plan(user_id, plan)   # プラン名の記録(利用可否の判定には使わない)
             new_balance = db.add_credit(user_id, PLANS[plan]["credit_usd"],
                                         f"チャージ: {PLANS[plan]['label']}")
-            flash(f"${PLANS[plan]['credit_usd']:.2f} をチャージしました"
-                  f"(残高 ${new_balance:.2f})")
+            flash(t("flash.charged",
+                      amount=f"{PLANS[plan]['credit_usd']:.2f}",
+                      balance=f"{new_balance:.2f}"))
             return redirect(url_for("dashboard"))
-        flash("決済に失敗しました")
+        flash(t("flash.payment_failed"))
     return render_template("plans.html", plans=PLANS, default=DEFAULT_PLAN,
                           balance=db.get_balance(user_id))
 
@@ -500,8 +547,7 @@ def services():
 def services_add():
     user_id = session["user_id"]
     if not crypto.is_configured():
-        flash("サーバーに CREDENTIAL_KEY が設定されていないため、"
-              "パスワードを安全に保存できません。管理者に連絡してください。")
+        flash(t("flash.no_crypto_key"))
         return redirect(url_for("services"))
 
     label = request.form.get("label", "").strip()
@@ -511,7 +557,7 @@ def services_add():
     course_choice = request.form.get("course", "").strip()
 
     if not (label and site_url and username and password):
-        flash("サイト名・URL・ユーザー名・パスワードをすべて入力してください")
+        flash(t("flash.cred_fields_required"))
         return redirect(url_for("services"))
     if not site_url.startswith(("http://", "https://")):
         site_url = "https://" + site_url
@@ -522,7 +568,7 @@ def services_add():
 
     db.add_site_credential(user_id, label, site_url, username,
                            crypto.encrypt(password), course_id)
-    flash(f"{label} のログイン情報を保存しました")
+    flash(t("flash.cred_saved", label=label))
     return redirect(url_for("services"))
 
 
@@ -530,7 +576,7 @@ def services_add():
 @login_required
 def services_delete(cred_id):
     db.delete_site_credential(session["user_id"], cred_id)
-    flash("ログイン情報を削除しました")
+    flash(t("flash.cred_deleted"))
     return redirect(url_for("services"))
 
 
@@ -550,11 +596,13 @@ def academic():
 
     sch = school_info.get_school(profile["school"])
     rows = db.list_transcript_courses(user_id)
+    # 公式集計(成績表末尾の UC GPA など)があればそちらを見出しに使う
+    official = db.get_official_totals(user_id)
     return render_template(
         "academic.html",
         school=sch,
         meta=db.get_transcript_meta(user_id),
-        summary=transcript_parser.compute_gpa(rows, profile["school"]),
+        summary=transcript_parser.compute_gpa(rows, profile["school"], official),
         terms=transcript_parser.group_by_term(rows, profile["school"]),
         has_data=bool(rows))
 
@@ -567,7 +615,7 @@ def academic_upload():
     profile = db.get_profile(user_id)
     f = request.files.get("file")
     if not f or not f.filename:
-        flash("成績表の .html ファイルを選択してください")
+        flash(t("flash.transcript_missing"))
         return redirect(url_for("academic"))
 
     raw = f.read()
@@ -583,9 +631,10 @@ def academic_upload():
         flash(result["error"])
         return redirect(url_for("academic"))
 
-    db.replace_transcript(user_id, f.filename, result["courses"])
-    flash(f"{len(result['courses'])} 件の履修を取り込みました"
-          f"({', '.join(result['terms'])})")
+    db.replace_transcript(user_id, f.filename, result["courses"],
+                          result.get("official"))
+    flash(t("flash.transcript_imported", count=len(result["courses"]),
+                terms=", ".join(result["terms"])))
     return redirect(url_for("academic"))
 
 
@@ -601,15 +650,15 @@ def academic_manual():
     try:
         units = float(request.form.get("units", ""))
     except ValueError:
-        flash("単位数は数値で入力してください")
+        flash(t("flash.units_numeric"))
         return redirect(url_for("academic"))
 
     if not (term and code and grade) or units <= 0:
-        flash("学期・科目コード・単位数・成績を入力してください")
+        flash(t("flash.manual_fields_required"))
         return redirect(url_for("academic"))
 
     db.add_transcript_course(user_id, term, code, title, units, grade)
-    flash(f"{code} を追加しました")
+    flash(t("flash.manual_added", code=code))
     return redirect(url_for("academic"))
 
 
@@ -710,12 +759,12 @@ def task_quiz():
 def _run_task(kind: str):
     user_id = session["user_id"]
     if not db.has_credit(user_id):
-        flash("クレジット残高がありません。チャージしてから実行してください。")
+        flash(t("flash.no_credit"))
         return redirect(url_for("plans"))
 
     f = request.files.get("file")
     if not f or not f.filename:
-        flash("ファイルを選択してください")
+        flash(t("flash.file_missing"))
         return redirect(url_for("dashboard"))
 
     course_choice = request.form.get("course", "").strip()
@@ -734,24 +783,27 @@ def _run_task(kind: str):
     out_filename = f"{user_id}_{stamp}_{kind}_{base}.{ext}"
     out_path = OUTPUT_DIR / out_filename
 
+    # 生成物の言語は画面の言語に合わせる(英語で使っているなら英語のノート)
+    out_lang = i18n.ai_output_lang()
+
     try:
         if kind == "notes":
             from study_agent.notes import make_notes
-            out = make_notes(str(in_path), out_path=str(out_path),
+            out = make_notes(str(in_path), out_path=str(out_path), lang=out_lang,
                              api_keys=MASTER_KEYS, usage_callback=cb, routing=routing)
         elif kind == "draft":
             from study_agent.assignment import make_draft
-            out = make_draft(str(in_path), out_path=str(out_path),
+            out = make_draft(str(in_path), out_path=str(out_path), lang=out_lang,
                              api_keys=MASTER_KEYS, usage_callback=cb, routing=routing)
         else:  # quiz
             from study_agent.quiz import answer_quiz
-            text = answer_quiz(str(in_path), notes_dir=str(OUTPUT_DIR),
+            text = answer_quiz(str(in_path), notes_dir=str(OUTPUT_DIR), lang=out_lang,
                                api_keys=MASTER_KEYS, usage_callback=cb,
                                routing=routing)
             out_path.write_text(text, encoding="utf-8")
             out = str(out_path)
     except Exception as e:  # noqa: BLE001
-        flash(f"エラー: {e}")
+        flash(t("flash.error", message=e))
         return redirect(url_for("dashboard"))
 
     db.add_note(user_id, course_id, kind, out_filename, f.filename)

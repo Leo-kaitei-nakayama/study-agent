@@ -4,39 +4,44 @@
   プラン = チャージパック。買った額が USD のクレジット残高に入り、
   AI を呼ぶたびに実際の概算コストが差し引かれる。
   トークン数は学生には見せない(plans.py のコメント参照)。
+
+  プランの説明文は plans.py ではなく i18n.py 側(plans.blurb_*)に置いてある。
+  これは説明文が翻訳対象で、金額などの数値だけが plans.py にあるため。
 #}
 {% extends "base.html" %}
+{% block title %}{{ t('plans.title') }} — Study Agent{% endblock %}
 {% block content %}
 <div class="intro-hero">
-  <h1>クレジットをチャージ</h1>
-  <p>チャージした分だけ AI を使えます。使った分は実際のコストで差し引かれます。</p>
+  <h1>{{ t('plans.title') }}</h1>
+  <p>{{ t('plans.subtitle') }}</p>
 </div>
 
 <div class="balance-strip">
-  現在の残高 <strong>${{ "%.2f"|format(balance) }}</strong>
+  {{ t('plans.balance_now') }} <strong>${{ "%.2f"|format(balance) }}</strong>
 </div>
 
 <div class="plan-grid">
   {% for key, p in plans.items() %}
   <div class="plan-card {% if key == default %}featured{% endif %}">
-    {% if key == default %}<span class="badge">人気</span>{% endif %}
+    {% if key == default %}<span class="badge">{{ t('plans.popular') }}</span>{% endif %}
     <h3>{{ p.label }}</h3>
     <div class="price">${{ p.price_usd }}</div>
-    <div class="plan-credit">→ ${{ "%.2f"|format(p.credit_usd) }} 分のクレジット
+    <div class="plan-credit">
+      {{ t('plans.credit_amount', amount="%.2f"|format(p.credit_usd)) }}
       {%- if p.credit_usd > p.price_usd %}
       <span class="bonus">+{{ ((p.credit_usd / p.price_usd - 1) * 100)|round|int }}%</span>
       {%- endif %}
     </div>
     <p class="blurb">
-      {{ p.blurb }}<br><br>
-      ブラウザ操作: {{ "○" if p.browse_allowed else "×" }}
+      {{ t('plans.blurb_' ~ key) }}<br><br>
+      {{ t('plans.browse') }}: {{ "○" if p.browse_allowed else "×" }}
     </p>
     <form method="post">
       <input type="hidden" name="plan" value="{{ key }}">
-      <button class="btn btn-primary" type="submit">チャージする</button>
+      <button class="btn btn-primary" type="submit">{{ t('plans.charge_btn') }}</button>
     </form>
   </div>
   {% endfor %}
 </div>
-<p class="fine-print">※ 現在は決済モックです。実際の請求は発生しません。</p>
+<p class="fine-print centered">※ {{ t('plans.mock_note') }}</p>
 {% endblock %}

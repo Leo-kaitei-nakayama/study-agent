@@ -9,10 +9,11 @@
 |---|---|
 | `app.py` | Flask のルーティング全部。画面とAPIの入口 |
 | `db.py` | Supabase (Postgres) への読み書き。SQL はここだけ |
+| `i18n.py` | 画面の文字列(英 / 日 / 中 / 韓)。**画面に出る文言は全部ここ** |
 | `crypto.py` | 外部サイトのパスワードを暗号化 / 復号 (Fernet) |
 | `school.py` | 学校ごとの定数(UCI: クォーター制 / 卒業180単位 / AntAlmanac) |
 | `transcript.py` | Unofficial Transcript (HTML) の解析と GPA 計算 |
-| `plans.py` | チャージパックの定義 |
+| `plans.py` | チャージパックの金額(説明文は i18n.py 側) |
 | `mailer.py` | 確認コードの送信(今はモック) |
 | `payments.py` | 決済(今はモック) |
 
@@ -68,16 +69,9 @@ Student Access の「Unofficial Transcript」を ⌘S / Ctrl+S で保存した `
 - **決済**: `payments.py` — 「購入」を押すと即座に成功したものとしてプランを有効化する。
   `instance/mock_payments.log` に記録される。本番接続時は `charge()` を Stripe Checkout に差し替える。
 
-## お金とトークンの流れ
-
-学生はプラン(Basic/Standard/Pro、`plans.py`)を購入します。実際のAPI呼び出しは
-**運営者(あなた)のマスターAPIキー**(環境変数)で行われ、学生ごとに「今サイクルの
-残トークン(Claude/ChatGPT/DeepSeekそれぞれ)」をSQLiteで管理します。プランで買った
-分を使い切ったら、そのAPIへのルーティングは自動で他の(残っている)APIに回されます。
-
 ## データ
 
-`instance/study_agent.db` (SQLite)。ユーザー・確認コード・サブスクリプション・利用履歴。
+ユーザー・確認コード・クレジット残高・履修・ログイン情報は Supabase (Postgres)。
 `instance/uploads/` `instance/outputs/` は課題ファイルと生成物の一時置き場です。
 
 ## まだ手動でやること
@@ -86,3 +80,31 @@ Student Access の「Unofficial Transcript」を ⌘S / Ctrl+S で保存した `
 - HTTPS化(本番では `debug=True` を外し、gunicorn等の背後に置く)
 - ノート/課題ドラフト/クイズ以外に、ブラウザ操作(`browse`)もWeb UIに繋ぐなら
   非同期実行(タスクキュー)にした方がよい — 現状はCLI (`agent.py browse`) からのみ利用可能
+
+## 多言語対応(英語 / 日本語 / 中国語 / 韓国語)
+
+**既定は英語。** 右上のボタンでいつでも切り替えられる。
+
+文字列は `i18n.py` の 1 つの辞書にまとまっていて、テンプレートからは
+`{{ t('dashboard.balance_label') }}` のようにキーで引く。gettext (.po/.mo) は
+使っていない — コンパイル手順が要らず、git push だけで反映されるため。
+
+言語の決まり方(先に見つかったものが勝つ):
+
+1. `?lang=xx`(言語ボタンから来たとき)
+2. セッション(切り替えたらブラウザが覚える)
+3. プロフィールの `lang` 列(ログイン済みなら端末を変えても引き継ぐ)
+4. ブラウザの `Accept-Language`
+5. 英語
+
+AI が作るノート / 課題ドラフト / クイズ回答の**言語も画面に合わせる**
+(英語で使っていれば英語のノートが出る)。`i18n.ai_output_lang()` を参照。
+
+### 文言を足す / 直すとき
+
+- `i18n.py` の `TRANSLATIONS["en"]` に必ずキーを足す(英語が最終フォールバック)
+- 他の言語で抜けたキーは英語で表示されるので、翻訳が間に合わなくても壊れない
+- **テンプレートに直接文字を書かない。** 英語の画面に日本語が出ていた不具合は
+  これが原因だった(`school.py` に手順が直書きされていた)
+- 区切り記号は `・` ではなく `·` を使う(`・` は日本語用の文字なので、
+  英語・中国語・韓国語の画面に混ざると不自然になる)

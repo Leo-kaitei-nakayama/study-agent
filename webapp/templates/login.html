@@ -1,17 +1,19 @@
+{# ログイン画面(確認コードを送るところまで)。 #}
 {% extends "base.html" %}
+{% block title %}{{ t('login.title') }} — Study Agent{% endblock %}
 {% block content %}
 <div class="intro-hero">
-  <h1>ログイン</h1>
-  <p>登録済みのメールアドレスに確認コードを送ります。</p>
+  <h1>{{ t('login.title') }}</h1>
+  <p>{{ t('login.subtitle') }}</p>
 </div>
 <div class="card">
   <form method="post">
-    <label for="email">メールアドレス</label>
+    <label for="email">{{ t('signup.email') }}</label>
     <input type="email" id="email" name="email" placeholder="name@uci.edu" required>
-    <button class="btn btn-primary btn-block" type="submit">確認コードを送信</button>
+    <button class="btn btn-primary btn-block" type="submit">{{ t('signup.send_code') }}</button>
   </form>
-  <p style="text-align:center; font-size:13px; color:var(--text-2); margin-top:14px;">
-    アカウントをお持ちでないですか? <a href="{{ url_for('signup') }}">サインアップ</a>
+  <p class="form-footnote">
+    {{ t('login.no_account') }} <a href="{{ url_for('signup') }}">{{ t('login.signup_link') }}</a>
   </p>
 </div>
 {% endblock %}

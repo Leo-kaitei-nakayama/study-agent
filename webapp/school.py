@@ -43,13 +43,15 @@ SCHOOLS = {
         # 履修計画サイト。ダッシュボード / GPA ページのボタンから開く。
         "planner_name": "AntAlmanac",
         "planner_url": "https://antalmanac.com",
-        # 成績表(Unofficial Transcript)を HTML で保存する手順の案内先
+        # 成績表(Unofficial Transcript)を HTML で保存する手順。
+        # 文言そのものではなく i18n.py のキーを持つ(画面の言語に合わせて出すため)。
+        # 学校ごとに手順が違うので、キーの並びをここで決められるようにしてある。
         "transcript_source": "UCI Student Access → Unofficial Transcript",
-        "transcript_help": [
-            "Student Access にログインする",
-            "「Unofficial Transcript」を開く",
-            "ページを保存する(⌘S / Ctrl+S)→ .html ファイルができる",
-            "その .html をここにアップロードする",
+        "transcript_help_keys": [
+            "academic.step_login",
+            "academic.step_open",
+            "academic.step_save",
+            "academic.step_upload",
         ],
         "grade_points": UCI_GRADE_POINTS,
         "passing_non_gpa": UCI_PASSING_NON_GPA,

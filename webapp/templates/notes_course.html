@@ -1,22 +1,39 @@
+{#
+  1 科目ぶんのノート一覧。
+
+  note.kind は DB に英語のまま入っている(notes / draft / quiz / syllabus …)ので、
+  表示するときだけ notes.kind_* のキーに変換する。未知の kind はそのまま出す。
+#}
 {% extends "base.html" %}
+{% block title %}{{ course.name if course else t('notes.uncategorized') }} — Study Agent{% endblock %}
 {% block content %}
+{% set kind_icons = {"notes": "📝", "draft": "✍️", "quiz": "❓",
+                     "syllabus": "📋", "assignments": "📌",
+                     "resource": "📎", "practice_answer": "🧩"} %}
+
 <div class="intro-hero">
-  <h1>{{ course.name if course else "未分類" }}</h1>
-  <p><a href="{{ url_for('notes_library') }}">← ノート一覧に戻る</a></p>
+  <h1>{{ course.name if course else t('notes.uncategorized') }}</h1>
+  <p><a href="{{ url_for('notes_library') }}">{{ t('notes.back_to_library') }}</a></p>
 </div>
 
 <div class="card">
   {% if notes %}
     {% for n in notes %}
+    {# 翻訳が無い kind は t() がキーをそのまま返すので、その場合は生の kind を出す #}
+    {% set kind_key = 'notes.kind_' ~ n.kind %}
+    {% set kind_label = t(kind_key) %}
     <div class="note-row">
-      <span class="note-kind">{{ {"notes": "📝 ノート", "draft": "✍️ 課題ドラフト", "quiz": "❓ クイズ回答"}.get(n.kind, n.kind) }}</span>
+      <span class="note-kind">
+        {{ kind_icons.get(n.kind, '📄') }}
+        {{ n.kind if kind_label == kind_key else kind_label }}
+      </span>
       <span class="note-source">{{ n.source_name }}</span>
       <span class="note-date">{{ n.created_at[:10] }}</span>
-      <a class="btn" href="{{ url_for('notes_download', note_id=n.id) }}">ダウンロード</a>
+      <a class="btn" href="{{ url_for('notes_download', note_id=n.id) }}">{{ t('common.download') }}</a>
     </div>
     {% endfor %}
   {% else %}
-    <p style="color:var(--text-muted); font-size:14px;">まだノートがありません。</p>
+    <p class="empty-state">{{ t('notes.empty_course') }}</p>
   {% endif %}
 </div>
 {% endblock %}

@@ -91,6 +91,9 @@ def init_db():
             major TEXT,
             school TEXT
         );
+        -- 表示言語。既存の DB にも後から足せるように ALTER で追加する
+        -- (CREATE TABLE IF NOT EXISTS は既存テーブルに列を足してくれないため)。
+        ALTER TABLE profiles ADD COLUMN IF NOT EXISTS lang TEXT;
         CREATE TABLE IF NOT EXISTS courses (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id),
@@ -164,6 +167,13 @@ def init_db():
             uploaded_at TEXT NOT NULL,
             source_name TEXT NOT NULL
         );
+        -- 大学が計算済みの集計値(成績表末尾の UC GPA など)。
+        -- 編入単位は履修行として載らないため、自前の合計より公式値の方が正しい。
+        -- 読み取れなかった場合は NULL で、そのときは履修行から計算する。
+        ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS official_gpa NUMERIC(5, 3);
+        ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS official_gpa_units NUMERIC(7, 2);
+        ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS official_grade_points NUMERIC(9, 2);
+        ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS official_units_completed NUMERIC(7, 2);
         -- 成績表から取り出した履修1件ずつ。再アップロード時は総入れ替え。
         CREATE TABLE IF NOT EXISTS transcript_courses (
             id SERIAL PRIMARY KEY,
@@ -327,6 +337,23 @@ def get_profile(user_id: int):
     with _conn() as c:
         return c.execute("SELECT * FROM profiles WHERE user_id=%s",
                          (user_id,)).fetchone()
+
+
+def set_lang(user_id: int, lang: str):
+    """表示言語をプロフィールに覚えさせる(端末を変えても引き継ぐため)。
+
+    プロフィール作成前に言語を切り替えることもあるので、行が無ければ何もしない
+    (その場合はセッションにだけ残り、オンボーディング時に保存される)。
+    """
+    with _conn() as c:
+        c.execute("UPDATE profiles SET lang=%s WHERE user_id=%s", (lang, user_id))
+
+
+def get_lang(user_id: int) -> str | None:
+    with _conn() as c:
+        row = c.execute("SELECT lang FROM profiles WHERE user_id=%s",
+                        (user_id,)).fetchone()
+        return row["lang"] if row else None
 
 
 # --------------------------------------------------------------- courses
@@ -586,13 +613,16 @@ def touch_site_credential(user_id: int, site_url: str):
 
 
 # --------------------------------------------------------------- transcript
-def replace_transcript(user_id: int, source_name: str, courses: list[dict]):
+def replace_transcript(user_id: int, source_name: str, courses: list[dict],
+                       official: dict | None = None):
     """成績表を丸ごと入れ替える(アップロードのたびに総入れ替え)。
 
     courses の各要素は {"term", "code", "title", "units", "grade"} を持つこと。
+    official は大学が計算済みの集計値(transcript.parse_transcript_html が返す)。
     GPA はここでは計算しない(transcript.py の役目)。
     """
     now = datetime.utcnow().isoformat()
+    official = official or {}
     with _conn() as c:
         c.execute("DELETE FROM transcript_courses WHERE user_id=%s AND source='upload'",
                   (user_id,))
@@ -603,12 +633,36 @@ def replace_transcript(user_id: int, source_name: str, courses: list[dict]):
                       (user_id, row.get("term", "Unknown"), row["code"],
                        row.get("title", ""), row["units"], row["grade"]))
         c.execute("""
-            INSERT INTO transcripts (user_id, uploaded_at, source_name)
-            VALUES (%s, %s, %s)
+            INSERT INTO transcripts (user_id, uploaded_at, source_name,
+                                     official_gpa, official_gpa_units,
+                                     official_grade_points, official_units_completed)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE SET
                 uploaded_at=EXCLUDED.uploaded_at,
-                source_name=EXCLUDED.source_name
-        """, (user_id, now, source_name))
+                source_name=EXCLUDED.source_name,
+                official_gpa=EXCLUDED.official_gpa,
+                official_gpa_units=EXCLUDED.official_gpa_units,
+                official_grade_points=EXCLUDED.official_grade_points,
+                official_units_completed=EXCLUDED.official_units_completed
+        """, (user_id, now, source_name, official.get("gpa"),
+              official.get("gpa_units"), official.get("grade_points"),
+              official.get("units_completed")))
+
+
+def get_official_totals(user_id: int) -> dict:
+    """保存済みの公式集計値を transcript.compute_gpa() に渡せる形で返す。
+
+    値が無い(読み取れなかった)項目は入れないので、呼び出し側では
+    「あるものだけ公式値を使う」動きになる。
+    """
+    row = get_transcript_meta(user_id)
+    if not row:
+        return {}
+    mapping = {"gpa": "official_gpa", "gpa_units": "official_gpa_units",
+               "grade_points": "official_grade_points",
+               "units_completed": "official_units_completed"}
+    return {key: float(row[col]) for key, col in mapping.items()
+            if row.get(col) is not None}
 
 
 def add_transcript_course(user_id: int, term: str, code: str, title: str,
