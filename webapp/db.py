@@ -120,6 +120,17 @@ def init_db():
             created_at TEXT NOT NULL,
             last_used_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS external_links (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            course_id INTEGER REFERENCES courses(id),
+            url TEXT NOT NULL,
+            label TEXT,
+            is_thin_syllabus INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            captured_at TEXT,
+            UNIQUE (user_id, url)
+        );
         """)
 
 
@@ -374,3 +385,43 @@ def get_user_by_extension_token_hash(token_hash: str):
             c.execute("UPDATE extension_tokens SET last_used_at=%s WHERE token_hash=%s",
                      (datetime.utcnow().isoformat(), token_hash))
         return row["user_id"] if row else None
+
+
+# --------------------------------------------------- external links (shim)
+def add_external_link(user_id: int, course_id: int | None, url: str,
+                      label: str, is_thin: bool):
+    """シラバス内で見つかった外部リンクを記録。既にあれば情報だけ更新する。"""
+    with _conn() as c:
+        c.execute("""
+            INSERT INTO external_links
+                (user_id, course_id, url, label, is_thin_syllabus, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, url) DO UPDATE SET
+                course_id = COALESCE(EXCLUDED.course_id, external_links.course_id),
+                label = EXCLUDED.label,
+                is_thin_syllabus = EXCLUDED.is_thin_syllabus
+        """, (user_id, course_id, url, label, 1 if is_thin else 0,
+              datetime.utcnow().isoformat()))
+
+
+def list_pending_links(user_id: int, thin_only: bool = False) -> list:
+    """まだ取り込まれていない外部リンク。thin_only=Trueなら
+    「シラバス本体が外部にある」と判定されたものだけ返す。"""
+    sql = ("SELECT el.*, c.name AS course_name FROM external_links el "
+           "LEFT JOIN courses c ON c.id = el.course_id "
+           "WHERE el.user_id=%s AND el.captured_at IS NULL")
+    if thin_only:
+        sql += " AND el.is_thin_syllabus = 1"
+    sql += " ORDER BY el.is_thin_syllabus DESC, el.id"
+    with _conn() as c:
+        return c.execute(sql, (user_id,)).fetchall()
+
+
+def mark_link_captured(user_id: int, url: str) -> bool:
+    """そのURLが未取り込みリンクとして登録されていれば、取り込み済みにする。"""
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE external_links SET captured_at=%s "
+            "WHERE user_id=%s AND url=%s AND captured_at IS NULL",
+            (datetime.utcnow().isoformat(), user_id, url))
+        return cur.rowcount > 0

@@ -3,7 +3,7 @@
   "name": "Study Agent Canvas Sync",
   "version": "0.1.0",
   "description": "Canvasを開くだけでシラバスを取得/練習問題の下書きを入力(許可制、提出は絶対にしません)",
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "alarms", "scripting"],
   "host_permissions": [
     "https://canvas.eee.uci.edu/*",
     "https://study-agent-500j.onrender.com/*"

@@ -9,6 +9,7 @@
 学生は課金するだけで、鍵を自分で入力する必要はない。
 """
 import os
+import re
 import sys
 from datetime import datetime
 from functools import wraps
@@ -251,6 +252,165 @@ def api_extension_syllabus():
     (OUTPUT_DIR / filename).write_text(text, encoding="utf-8")
     db.add_note(user_id, course_id, "syllabus", filename, f"{course_name} syllabus")
     return {"status": "ok"}
+
+
+@app.route("/api/extension/state", methods=["GET"])
+def api_extension_state():
+    """拡張機能が「すでにサーバーが持っている情報」を確認するための入口。
+    これを見て、取得済みのシラバスは再取得しない。"""
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+
+    courses = db.list_user_courses(user_id)
+    synced = []
+    for c in courses:
+        notes = db.list_notes_for_course(user_id, c["id"])
+        if any(n["kind"] == "syllabus" for n in notes):
+            synced.append(c["name"])
+    pending = db.list_pending_links(user_id)
+    return {"courses": [c["name"] for c in courses], "synced_syllabi": synced,
+            "pending_links": [
+                {"url": p["url"], "label": p["label"],
+                 "course": p["course_name"],
+                 "is_thin_syllabus": bool(p["is_thin_syllabus"])}
+                for p in pending]}
+
+
+@app.route("/api/extension/sync", methods=["POST"])
+def api_extension_sync():
+    """科目・シラバス・課題をまとめて受け取る(自動モードの受け口)。"""
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+
+    payload = request.get_json(silent=True) or {}
+    courses = payload.get("courses") or []
+    if not isinstance(courses, list):
+        return {"error": "courses must be a list"}, 400
+
+    saved_syllabi = 0
+    saved_assignments = 0
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+
+    for entry in courses:
+        if not isinstance(entry, dict):
+            continue
+        name = (entry.get("name") or "").strip()
+        if not name:
+            continue
+        course_id = db.add_course(user_id, name)
+
+        # シラバス内の外部リンクを記録(本体が外部サイトにある科目への対応)
+        for link in (entry.get("syllabus_links") or []):
+            if not isinstance(link, dict):
+                continue
+            url = (link.get("url") or "").strip()
+            if not url:
+                continue
+            db.add_external_link(user_id, course_id, url,
+                                (link.get("label") or "")[:200],
+                                bool(entry.get("syllabus_is_thin")))
+
+        syllabus = (entry.get("syllabus") or "").strip()
+        if syllabus:
+            fn = f"{user_id}_{stamp}_syllabus_{course_id}.md"
+            (OUTPUT_DIR / fn).write_text(syllabus, encoding="utf-8")
+            db.add_note(user_id, course_id, "syllabus", fn, f"{name} syllabus")
+            saved_syllabi += 1
+
+        assignments = entry.get("assignments") or []
+        if assignments:
+            lines = [f"# {name} — 課題一覧", ""]
+            for a in assignments:
+                if not isinstance(a, dict):
+                    continue
+                due = a.get("due_at") or "期限なし"
+                lines.append(f"## {a.get('name', '(名称なし)')}")
+                lines.append(f"- 期限: {due}")
+                if a.get("points") is not None:
+                    lines.append(f"- 配点: {a['points']}")
+                desc = (a.get("description") or "").strip()
+                if desc:
+                    lines.append("")
+                    lines.append(desc)
+                lines.append("")
+            fn = f"{user_id}_{stamp}_assignments_{course_id}.md"
+            (OUTPUT_DIR / fn).write_text("\n".join(lines), encoding="utf-8")
+            db.add_note(user_id, course_id, "assignments", fn,
+                       f"{name} 課題一覧")
+            saved_assignments += 1
+
+    pending = db.list_pending_links(user_id, thin_only=True)
+    return {"status": "ok", "courses": len(courses),
+            "syllabi": saved_syllabi, "assignments": saved_assignments,
+            "pending_external_syllabi": [
+                {"url": p["url"], "label": p["label"],
+                 "course": p["course_name"]} for p in pending]}
+
+
+@app.route("/api/extension/links", methods=["POST"])
+def api_extension_links():
+    """content.js がページ上で常時検知したリンクをまとめて報告する。
+    ここから他のページに追加でアクセスすることはない(受け取って記録するだけ)。"""
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+
+    payload = request.get_json(silent=True) or {}
+    links = payload.get("links") or []
+    if not isinstance(links, list):
+        return {"error": "links must be a list"}, 400
+
+    course_name = (payload.get("course_name") or "").strip()
+    course_id = db.add_course(user_id, course_name) if course_name else None
+
+    saved = 0
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        url = (link.get("url") or "").strip()
+        if not url:
+            continue
+        db.add_external_link(user_id, course_id, url,
+                             (link.get("label") or "")[:200], False)
+        saved += 1
+
+    return {"status": "ok", "saved": saved}
+
+
+@app.route("/api/extension/capture", methods=["POST"])
+def api_extension_capture():
+    """任意のサイトのページを取り込む(手動モード)。
+    ユーザーがボタンを押した時だけ拡張機能から送られてくる。"""
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+
+    payload = request.get_json(silent=True) or {}
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return {"error": "text is required"}, 400
+
+    url = (payload.get("url") or "").strip()
+    title = (payload.get("title") or "").strip() or url or "取り込んだページ"
+    course_name = (payload.get("course_name") or "").strip()
+    kind = payload.get("kind") or "resource"
+    if kind not in ("resource", "requirements"):
+        kind = "resource"
+
+    course_id = db.add_course(user_id, course_name) if course_name else None
+
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    safe = re.sub(r"[^A-Za-z0-9_\-]+", "_", title)[:40] or "page"
+    fn = f"{user_id}_{stamp}_{kind}_{safe}.md"
+    body = f"# {title}\n\n出典: {url}\n\n---\n\n{text}"
+    (OUTPUT_DIR / fn).write_text(body, encoding="utf-8")
+    db.add_note(user_id, course_id, kind, fn, title)
+    resolved = db.mark_link_captured(user_id, url) if url else False
+
+    return {"status": "ok", "chars": len(text), "title": title,
+            "resolved_pending_link": resolved}
 
 
 @app.route("/api/extension/answer", methods=["POST"])
