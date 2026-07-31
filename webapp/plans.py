@@ -1,31 +1,43 @@
-"""プランごとの月間トークン付与量。
+"""プラン(= クレジットのチャージパック)の定義。
 
-方針: 学生は「プラン(=月額)」を買う。実際のAPI呼び出しは運営側(あなた)の
-マスターAPIキーで行われ、学生ごとの残トークンをここで管理して差し引く。
+■ 考え方
+学生は「プラン」を買う。買った金額はそのまま **USD のクレジット残高** になり、
+AI を呼ぶたびに実際の概算コストが差し引かれる。画面に出すのは残高(ドル)で、
+プロバイダごとの残トークン数は出さない(学生には意味のない数字なので)。
+
+  price_usd   … 請求額
+  credit_usd  … 残高に入る額。price_usd より多い = まとめ買いの割引分。
+  monthly_tokens … 旧トークン方式の名残。subscriptions テーブルの互換のために
+                   残しているだけで、利用可否の判定には使っていない
+                   (判定は db.has_credit() = 残高が正かどうか)。
 """
 
 PLANS = {
     "basic": {
         "label": "Basic",
         "price_usd": 5,
-        "monthly_tokens": {"claude": 20_000, "openai": 200_000, "deepseek": 300_000},
+        "credit_usd": 5.00,
         "browse_allowed": False,
-        "blurb": "DeepSeek中心・ノート作成メイン",
+        "blurb": "まずは試す。ノート作成 100 回ぶんくらい。",
     },
     "standard": {
         "label": "Standard",
         "price_usd": 15,
-        "monthly_tokens": {"claude": 80_000, "openai": 400_000, "deepseek": 600_000},
+        "credit_usd": 16.50,      # +10% ボーナス
         "browse_allowed": True,
-        "blurb": "全API・ブラウザ操作・クイズ支援込み",
+        "blurb": "毎週の課題ドラフト・クイズ支援まで。+10% ボーナス。",
     },
     "pro": {
         "label": "Pro",
         "price_usd": 35,
-        "monthly_tokens": {"claude": 300_000, "openai": 800_000, "deepseek": 1_000_000},
+        "credit_usd": 42.00,      # +20% ボーナス
         "browse_allowed": True,
-        "blurb": "Claude優先で高精度・上限大",
+        "blurb": "Claude 優先で高精度。使い切らない量。+20% ボーナス。",
     },
 }
 
 DEFAULT_PLAN = "standard"
+
+# 旧 subscriptions テーブルが NOT NULL を要求するための固定値。
+# クレジット方式に移行したので、この数値で利用が止まることはない。
+LEGACY_TOKEN_ALLOWANCE = {"claude": 0, "openai": 0, "deepseek": 0}

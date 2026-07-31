@@ -1,8 +1,19 @@
+{#
+  クレジットのチャージ画面。
+
+  プラン = チャージパック。買った額が USD のクレジット残高に入り、
+  AI を呼ぶたびに実際の概算コストが差し引かれる。
+  トークン数は学生には見せない(plans.py のコメント参照)。
+#}
 {% extends "base.html" %}
 {% block content %}
 <div class="intro-hero">
-  <h1>プランを選択</h1>
-  <p>プランに応じて、Claude / ChatGPT / DeepSeek それぞれの月間トークン量が変わります。</p>
+  <h1>クレジットをチャージ</h1>
+  <p>チャージした分だけ AI を使えます。使った分は実際のコストで差し引かれます。</p>
+</div>
+
+<div class="balance-strip">
+  現在の残高 <strong>${{ "%.2f"|format(balance) }}</strong>
 </div>
 
 <div class="plan-grid">
@@ -10,22 +21,22 @@
   <div class="plan-card {% if key == default %}featured{% endif %}">
     {% if key == default %}<span class="badge">人気</span>{% endif %}
     <h3>{{ p.label }}</h3>
-    <div class="price">${{ p.price_usd }}<span>/月</span></div>
+    <div class="price">${{ p.price_usd }}</div>
+    <div class="plan-credit">→ ${{ "%.2f"|format(p.credit_usd) }} 分のクレジット
+      {%- if p.credit_usd > p.price_usd %}
+      <span class="bonus">+{{ ((p.credit_usd / p.price_usd - 1) * 100)|round|int }}%</span>
+      {%- endif %}
+    </div>
     <p class="blurb">
       {{ p.blurb }}<br><br>
-      Claude: {{ "{:,}".format(p.monthly_tokens.claude) }} tok<br>
-      ChatGPT: {{ "{:,}".format(p.monthly_tokens.openai) }} tok<br>
-      DeepSeek: {{ "{:,}".format(p.monthly_tokens.deepseek) }} tok<br>
       ブラウザ操作: {{ "○" if p.browse_allowed else "×" }}
     </p>
     <form method="post">
       <input type="hidden" name="plan" value="{{ key }}">
-      <button class="btn btn-primary" type="submit">このプランにする</button>
+      <button class="btn btn-primary" type="submit">チャージする</button>
     </form>
   </div>
   {% endfor %}
 </div>
-<p style="text-align:center; font-size:12px; color:var(--text-muted); margin-top:18px;">
-  ※ 現在は決済モックです。実際の請求は発生しません。
-</p>
+<p class="fine-print">※ 現在は決済モックです。実際の請求は発生しません。</p>
 {% endblock %}

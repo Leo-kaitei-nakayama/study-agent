@@ -24,7 +24,12 @@ body {
 nav a { margin-left: 16px; color: var(--text-2); text-decoration: none; font-size: 14px; }
 nav a:hover { color: var(--text); }
 
-.container { max-width: 720px; margin: 0 auto; padding: 32px 20px 60px; }
+.container { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }
+
+/* 狭い画面ではナビが溢れるので折り返す */
+.topbar { flex-wrap: wrap; gap: 8px; }
+nav { display: flex; flex-wrap: wrap; }
+nav a:first-child { margin-left: 0; }
 
 .flash { background: var(--accent-bg); color: var(--accent-text); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 20px; font-size: 14px; }
@@ -97,23 +102,160 @@ input:focus { outline: none; border-color: var(--accent); }
 .stat-box .label { font-size: 12px; color: var(--text-2); margin-bottom: 4px; }
 .stat-box .value { font-size: 18px; font-weight: 600; }
 
-.token-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 13px; }
-.token-bar { flex-grow: 1; height: 6px; background: var(--border); border-radius: 4px; margin: 0 10px; overflow: hidden; }
-.token-bar-fill { height: 100%; background: var(--accent); }
+/* ------------------------------------------------ 共通パーツ */
+.page-head { margin-bottom: 22px; }
+.page-head h1 { font-size: 22px; margin: 0 0 4px; }
+.page-head p { color: var(--text-2); font-size: 13px; margin: 0; }
 
-.course-chip {
-  display: inline-block; font-size: 12px; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 999px; padding: 4px 12px; margin: 0 6px 6px 0;
+.card-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 14px; gap: 12px;
+}
+.card-title { font-size: 15px; font-weight: 600; margin: 0; }
+.card-link { font-size: 13px; color: var(--accent-text); text-decoration: none; }
+.card-link:hover { text-decoration: underline; }
+
+.fine-print { font-size: 12px; color: var(--text-muted); margin: 10px 0 0; }
+.fine-print a { color: var(--accent-text); }
+.empty-state { font-size: 13px; color: var(--text-muted); margin: 0; }
+.bullet-list { font-size: 13px; color: var(--text-2); margin: 0; padding-left: 20px; }
+.bullet-list li { margin-bottom: 6px; }
+.note-card { background: var(--bg); }
+
+.warn-banner {
+  background: #fff3d6; color: #7a5a00; border: 1px solid #f0dca8;
+  border-radius: var(--radius); padding: 12px 14px; font-size: 13px; margin-bottom: 20px;
 }
 
-.action-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px; }
-.action-grid form { display: flex; flex-direction: column; gap: 8px; }
-.action-grid input[type=file] { font-size: 12px; }
-.action-grid select {
-  font-size: 12px; padding: 6px 8px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--bg); color: var(--text);
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-danger { color: #a52121; border-color: #e8cccc; }
+.btn-danger:hover { background: #fdf3f3; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ------------------------------------------------ フォーム */
+.stack-form { display: flex; flex-direction: column; gap: 4px; }
+.stack-form button { align-self: flex-start; margin-top: 14px; }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.inline-form { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+/* 横並びのフォームでは file 入力を伸ばしきらない(ボタンが折り返さないように) */
+.inline-form input[type=file] { width: auto; flex: 1 1 260px; }
+input[type=password], input[type=file], select, textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: 14px; background: var(--bg); color: var(--text);
 }
-.action-grid button { font-size: 13px; }
+input:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ------------------------------------------------ 表 */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th {
+  text-align: left; font-weight: 500; font-size: 12px; color: var(--text-2);
+  border-bottom: 1px solid var(--border); padding: 0 10px 8px 0;
+}
+.data-table td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table .num { text-align: right; padding-right: 16px; }
+.cell-strong { font-weight: 600; }
+.cell-sub { font-size: 12px; color: var(--text-2); text-decoration: none; word-break: break-all; }
+a.cell-sub:hover { text-decoration: underline; }
+.cell-muted { color: var(--text-muted); white-space: nowrap; }
+.cell-actions { text-align: right; white-space: nowrap; }
+
+.grade-pill {
+  display: inline-block; min-width: 30px; text-align: center;
+  background: var(--accent-bg); color: var(--accent-text);
+  border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600;
+}
+
+/* ------------------------------------------------ クレジット残高 */
+.balance-card {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  background: var(--accent-bg); border-radius: 12px; padding: 18px 20px; flex-wrap: wrap;
+}
+.balance-card.is-empty { background: #fdf1f1; }
+.balance-label { font-size: 12px; color: var(--accent-text); }
+.balance-value { font-size: 30px; font-weight: 600; line-height: 1.2; }
+.balance-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.balance-strip {
+  text-align: center; font-size: 13px; color: var(--text-2); margin-bottom: 18px;
+}
+.balance-strip strong { font-size: 16px; color: var(--text); }
+
+.plan-credit { font-size: 13px; color: var(--accent-text); margin-bottom: 10px; }
+.plan-credit .bonus {
+  background: var(--accent-bg); border-radius: 999px; padding: 1px 8px;
+  font-size: 11px; font-weight: 600; margin-left: 4px;
+}
+
+/* ------------------------------------------------ 科目グリッド */
+.course-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.course-card {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; text-decoration: none; color: var(--text);
+}
+.course-card:hover { border-color: var(--accent); background: var(--surface); }
+.course-name { font-size: 13px; font-weight: 500; line-height: 1.35; }
+.course-count { font-size: 11px; color: var(--text-muted); }
+
+/* ------------------------------------------------ ショートカット */
+.shortcut-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.shortcut-card {
+  display: flex; flex-direction: column; gap: 3px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  padding: 18px; text-decoration: none; color: var(--text);
+}
+.shortcut-card:hover { border-color: var(--accent); }
+.shortcut-icon { font-size: 22px; }
+.shortcut-title { font-weight: 600; font-size: 14px; }
+.shortcut-sub { font-size: 12px; color: var(--text-2); line-height: 1.4; }
+
+/* ------------------------------------------------ GPA */
+.gpa-hero { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+.gpa-big {
+  background: var(--accent-bg); border-radius: 14px; padding: 18px 26px; text-align: center;
+}
+.gpa-value { font-size: 38px; font-weight: 600; line-height: 1.1; color: var(--accent-text); }
+.gpa-label { font-size: 12px; color: var(--accent-text); }
+.gpa-side { flex: 1 1 320px; }
+.gpa-side .stat-grid { margin-bottom: 12px; }
+
+.progress-wrap { margin-top: 4px; }
+.progress-bar { height: 8px; background: var(--border); border-radius: 5px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); border-radius: 5px; }
+.progress-caption { font-size: 12px; color: var(--text-2); margin-top: 6px; }
+
+.planner-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.planner-row .fine-print { margin: 0; }
+
+.steps-list { font-size: 13px; color: var(--text-2); margin: 0; padding-left: 20px; }
+.steps-list li { margin-bottom: 4px; }
+
+.term-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; gap: 12px; }
+.term-meta { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+
+/* ------------------------------------------------ 拡張機能カード */
+.ext-status { font-size: 12px; margin-bottom: 8px; }
+.token-display { font-size: 11px; color: var(--text-muted); margin-top: 8px; word-break: break-all; }
+
+/* ------------------------------------------------ タスク実行 */
+.action-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.action-card {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+}
+.action-head { display: flex; align-items: center; gap: 8px; }
+.action-icon { font-size: 18px; }
+.action-name { font-weight: 600; font-size: 14px; }
+.action-hint { font-size: 12px; color: var(--text-2); margin: 0; flex-grow: 1; }
+.action-card select, .action-card input[type=file] { font-size: 12px; padding: 8px 10px; }
+.action-card button { margin-top: 2px; }
+
+@media (max-width: 560px) {
+  .field-row { grid-template-columns: 1fr; }
+  .stat-grid { grid-template-columns: 1fr; }
+  .plan-grid { grid-template-columns: 1fr; }
+}
 
 .notes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
 .notes-tile {

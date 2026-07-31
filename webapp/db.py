@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from plans import PLANS
+from plans import LEGACY_TOKEN_ALLOWANCE
 
 CODE_TTL_MIN = 10
 CYCLE_DAYS = 30
@@ -131,6 +131,50 @@ def init_db():
             captured_at TEXT,
             UNIQUE (user_id, url)
         );
+        -- クレジット残高(USD)。画面にはトークン数ではなくこれを出す。
+        CREATE TABLE IF NOT EXISTS credits (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id),
+            balance_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+        -- チャージと利用の明細。delta_usd は チャージ=+, 利用=- 。
+        CREATE TABLE IF NOT EXISTS credit_ledger (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            delta_usd NUMERIC(12, 6) NOT NULL,
+            reason TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        -- 授業で使うサイトのログイン情報。password は crypto.encrypt() 済みの文字列。
+        CREATE TABLE IF NOT EXISTS site_credentials (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            course_id INTEGER REFERENCES courses(id),
+            label TEXT NOT NULL,
+            site_url TEXT NOT NULL,
+            username TEXT NOT NULL,
+            encrypted_password TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT,
+            UNIQUE (user_id, site_url)
+        );
+        -- 成績表アップロードの記録(1ユーザー1件、上書き)。
+        CREATE TABLE IF NOT EXISTS transcripts (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id),
+            uploaded_at TEXT NOT NULL,
+            source_name TEXT NOT NULL
+        );
+        -- 成績表から取り出した履修1件ずつ。再アップロード時は総入れ替え。
+        CREATE TABLE IF NOT EXISTS transcript_courses (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            term TEXT NOT NULL,
+            code TEXT NOT NULL,
+            title TEXT,
+            units NUMERIC(5, 2) NOT NULL,
+            grade TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'upload'
+        );
         """)
 
 
@@ -186,7 +230,12 @@ def check_code(user_id: int, purpose: str, code: str) -> bool:
 
 # ------------------------------------------------------------ subscriptions
 def _fresh_allowance(plan: str) -> dict:
-    return dict(PLANS[plan]["monthly_tokens"])
+    """旧トークン方式の付与量。クレジット方式に移行したので常に 0。
+
+    subscriptions テーブルの NOT NULL 制約を満たすためだけに残っている。
+    利用可否は has_credit()(= クレジット残高)で判定する。
+    """
+    return dict(LEGACY_TOKEN_ALLOWANCE)
 
 
 def set_plan(user_id: int, plan: str):
@@ -227,11 +276,12 @@ def get_subscription(user_id: int):
 
 
 def has_tokens(user_id: int, provider: str, need: int = 1) -> bool:
+    """旧インターフェース。クレジット方式に移行したので残高だけを見る。
+
+    プロバイダごとの上限は無くなったので provider 引数は検証だけして無視する。
+    """
     _check_provider(provider)
-    sub = get_subscription(user_id)
-    if not sub:
-        return False
-    return sub[f"remaining_{provider}"] >= need
+    return has_credit(user_id)
 
 
 def deduct_tokens(user_id: int, provider: str, tokens_in: int, tokens_out: int,
@@ -425,3 +475,173 @@ def mark_link_captured(user_id: int, url: str) -> bool:
             "WHERE user_id=%s AND url=%s AND captured_at IS NULL",
             (datetime.utcnow().isoformat(), user_id, url))
         return cur.rowcount > 0
+
+
+# ------------------------------------------------------------------ credits
+# 画面に出すのは「トークン残量」ではなく「USD のクレジット残高」。
+# AI を呼ぶたびに概算コストを引き、残高が 0 以下なら実行を止める。
+def get_balance(user_id: int) -> float:
+    with _conn() as c:
+        row = c.execute("SELECT balance_usd FROM credits WHERE user_id=%s",
+                        (user_id,)).fetchone()
+        return float(row["balance_usd"]) if row else 0.0
+
+
+def add_credit(user_id: int, amount_usd: float, reason: str) -> float:
+    """チャージ(正の数)。新しい残高を返す。"""
+    return _move_credit(user_id, abs(float(amount_usd)), reason)
+
+
+def charge_credit(user_id: int, amount_usd: float, reason: str) -> float:
+    """利用分を差し引く(負の数として記録)。新しい残高を返す。
+
+    残高はマイナスを許す。1回の呼び出しの途中で尽きても処理は完了させ、
+    次の実行を has_credit() で止める方が、生成物が中途半端にならない。
+    """
+    return _move_credit(user_id, -abs(float(amount_usd)), reason)
+
+
+def _move_credit(user_id: int, delta_usd: float, reason: str) -> float:
+    now = datetime.utcnow().isoformat()
+    with _conn() as c:
+        row = c.execute("""
+            INSERT INTO credits (user_id, balance_usd, updated_at)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                balance_usd = credits.balance_usd + EXCLUDED.balance_usd,
+                updated_at = EXCLUDED.updated_at
+            RETURNING balance_usd
+        """, (user_id, delta_usd, now)).fetchone()
+        c.execute("""INSERT INTO credit_ledger (user_id, delta_usd, reason, created_at)
+                     VALUES (%s, %s, %s, %s)""", (user_id, delta_usd, reason, now))
+        return float(row["balance_usd"])
+
+
+def has_credit(user_id: int) -> bool:
+    """残高が残っているか。AI タスクを始める前のチェックに使う。"""
+    return get_balance(user_id) > 0
+
+
+def list_credit_ledger(user_id: int, limit: int = 20) -> list:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM credit_ledger WHERE user_id=%s "
+            "ORDER BY id DESC LIMIT %s", (user_id, limit)).fetchall()
+        for r in rows:
+            r["delta_usd"] = float(r["delta_usd"])
+        return rows
+
+
+# ------------------------------------------------------- site credentials
+def add_site_credential(user_id: int, label: str, site_url: str, username: str,
+                        encrypted_password: str, course_id: int | None = None):
+    """サイトのログイン情報を保存(同じ URL があれば上書き)。
+
+    encrypted_password は crypto.encrypt() を通した文字列であること。
+    このモジュールは暗号化の中身を知らない(平文を受け取らない)。
+    """
+    with _conn() as c:
+        c.execute("""
+            INSERT INTO site_credentials
+                (user_id, course_id, label, site_url, username,
+                 encrypted_password, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, site_url) DO UPDATE SET
+                label=EXCLUDED.label, username=EXCLUDED.username,
+                encrypted_password=EXCLUDED.encrypted_password,
+                course_id=COALESCE(EXCLUDED.course_id, site_credentials.course_id)
+        """, (user_id, course_id, label, site_url, username, encrypted_password,
+              datetime.utcnow().isoformat()))
+
+
+def list_site_credentials(user_id: int) -> list:
+    """一覧表示用。暗号化済みパスワードも含むので、画面には出さないこと。"""
+    with _conn() as c:
+        return c.execute("""
+            SELECT sc.*, c.name AS course_name FROM site_credentials sc
+            LEFT JOIN courses c ON c.id = sc.course_id
+            WHERE sc.user_id=%s ORDER BY sc.label
+        """, (user_id,)).fetchall()
+
+
+def get_site_credential(user_id: int, site_url: str):
+    with _conn() as c:
+        return c.execute(
+            "SELECT * FROM site_credentials WHERE user_id=%s AND site_url=%s",
+            (user_id, site_url)).fetchone()
+
+
+def delete_site_credential(user_id: int, cred_id: int):
+    with _conn() as c:
+        c.execute("DELETE FROM site_credentials WHERE id=%s AND user_id=%s",
+                  (cred_id, user_id))
+
+
+def touch_site_credential(user_id: int, site_url: str):
+    """エージェントがそのログイン情報を使ったときに最終使用日時を更新する。"""
+    with _conn() as c:
+        c.execute("UPDATE site_credentials SET last_used_at=%s "
+                  "WHERE user_id=%s AND site_url=%s",
+                  (datetime.utcnow().isoformat(), user_id, site_url))
+
+
+# --------------------------------------------------------------- transcript
+def replace_transcript(user_id: int, source_name: str, courses: list[dict]):
+    """成績表を丸ごと入れ替える(アップロードのたびに総入れ替え)。
+
+    courses の各要素は {"term", "code", "title", "units", "grade"} を持つこと。
+    GPA はここでは計算しない(transcript.py の役目)。
+    """
+    now = datetime.utcnow().isoformat()
+    with _conn() as c:
+        c.execute("DELETE FROM transcript_courses WHERE user_id=%s AND source='upload'",
+                  (user_id,))
+        for row in courses:
+            c.execute("""INSERT INTO transcript_courses
+                         (user_id, term, code, title, units, grade, source)
+                         VALUES (%s, %s, %s, %s, %s, %s, 'upload')""",
+                      (user_id, row.get("term", "Unknown"), row["code"],
+                       row.get("title", ""), row["units"], row["grade"]))
+        c.execute("""
+            INSERT INTO transcripts (user_id, uploaded_at, source_name)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                uploaded_at=EXCLUDED.uploaded_at,
+                source_name=EXCLUDED.source_name
+        """, (user_id, now, source_name))
+
+
+def add_transcript_course(user_id: int, term: str, code: str, title: str,
+                          units: float, grade: str):
+    """手入力で 1 件だけ足す(HTML の解析に失敗したときの逃げ道)。
+
+    source='manual' なので、後で成績表を再アップロードしても消えない。
+    """
+    with _conn() as c:
+        c.execute("""INSERT INTO transcript_courses
+                     (user_id, term, code, title, units, grade, source)
+                     VALUES (%s, %s, %s, %s, %s, %s, 'manual')""",
+                  (user_id, term, code, title, units, grade))
+
+
+def list_transcript_courses(user_id: int) -> list:
+    """GPA 計算に渡せる形(units は float)で履修一覧を返す。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM transcript_courses WHERE user_id=%s ORDER BY id",
+            (user_id,)).fetchall()
+        for r in rows:
+            r["units"] = float(r["units"])
+        return rows
+
+
+def delete_transcript_course(user_id: int, row_id: int):
+    with _conn() as c:
+        c.execute("DELETE FROM transcript_courses WHERE id=%s AND user_id=%s",
+                  (row_id, user_id))
+
+
+def get_transcript_meta(user_id: int):
+    with _conn() as c:
+        return c.execute("SELECT * FROM transcripts WHERE user_id=%s",
+                         (user_id,)).fetchone()

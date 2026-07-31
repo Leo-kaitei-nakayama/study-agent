@@ -1,0 +1,159 @@
+{#
+  学業ページ(GPA と卒業単位の進捗)。
+
+  役割:
+    - Student Access で保存した Unofficial Transcript (.html) をアップロード
+    - transcript.py が解析した結果から、累積 GPA と「卒業単位まであと何単位か」を表示
+    - 学期ごとの履修一覧(その学期の GPA 付き)
+    - 履修計画サイト(UCI なら AntAlmanac)へのボタン
+
+  データの出どころ:
+    app.py の academic() が transcript_courses テーブルを読み、
+    transcript.compute_gpa() / group_by_term() を通した結果を渡してくる。
+#}
+{% extends "base.html" %}
+{% block title %}学業 — Study Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>学業</h1>
+  <p>{{ school.name }} ・ {{ "クォーター制" if school.term_system == "quarter" else "セメスター制" }}
+     ・ 卒業要件 {{ school.graduation_units }} 単位</p>
+</div>
+
+{# ------------------------------------------------ 進捗サマリ #}
+<div class="card">
+  <div class="gpa-hero">
+    <div class="gpa-big">
+      <div class="gpa-value">{{ "%.2f"|format(summary.gpa) }}</div>
+      <div class="gpa-label">累積 GPA</div>
+    </div>
+    <div class="gpa-side">
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="label">取得単位</div>
+          <div class="value">{{ summary.units_earned }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">卒業まで残り</div>
+          <div class="value">{{ summary.remaining }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">GPA 対象単位</div>
+          <div class="value">{{ summary.gpa_units }}</div>
+        </div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {{ summary.progress_pct }}%;"></div>
+        </div>
+        <div class="progress-caption">
+          {{ summary.units_earned }} / {{ summary.goal_units }} 単位（{{ summary.progress_pct }}%）
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="planner-row">
+    <a class="btn btn-primary" href="{{ school.planner_url }}" target="_blank" rel="noopener">
+      {{ school.planner_name }} で履修計画を立てる →
+    </a>
+    <span class="fine-print">卒業までの科目の並べ方は {{ school.planner_name }} 側で管理します。</span>
+  </div>
+</div>
+
+{# ------------------------------------------------ アップロード #}
+<div class="card">
+  <div class="card-head">
+    <h2 class="card-title">成績表を取り込む</h2>
+    {% if meta %}
+    <span class="term-meta">最終アップロード: {{ meta.uploaded_at[:10] }}</span>
+    {% endif %}
+  </div>
+
+  <ol class="steps-list">
+    {% for step in school.transcript_help %}<li>{{ step }}</li>{% endfor %}
+  </ol>
+
+  <form method="post" action="{{ url_for('academic_upload') }}"
+        enctype="multipart/form-data" class="inline-form">
+    <input type="file" name="file" accept=".html,.htm" required>
+    <button class="btn btn-primary" type="submit">アップロード</button>
+  </form>
+  <p class="fine-print">
+    再アップロードすると、前回の取り込み分は置き換わります（手入力した科目は残ります）。
+  </p>
+</div>
+
+{# ------------------------------------------------ 学期ごとの履修 #}
+{% if has_data %}
+  {% for t in terms %}
+  <div class="card">
+    <div class="term-head">
+      <h2 class="card-title">{{ t.term }}</h2>
+      <span class="term-meta">GPA {{ "%.2f"|format(t.gpa) }} ・ {{ t.units }} 単位</span>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr><th>科目</th><th>タイトル</th><th class="num">単位</th><th>成績</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for c in t.courses %}
+        <tr>
+          <td class="cell-strong">{{ c.code }}</td>
+          <td class="cell-sub">{{ c.title or "—" }}</td>
+          <td class="num">{{ c.units }}</td>
+          <td><span class="grade-pill">{{ c.grade }}</span></td>
+          <td class="cell-actions">
+            <form method="post" action="{{ url_for('academic_delete', row_id=c.id) }}">
+              <button class="btn btn-sm" type="submit" title="この行を削除">×</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+{% else %}
+<div class="card">
+  <p class="empty-state">まだ成績表が取り込まれていません。上のフォームからアップロードするか、下で手入力してください。</p>
+</div>
+{% endif %}
+
+{# ------------------------------------------------ 手入力の逃げ道 #}
+<details class="card">
+  <summary class="card-title" style="cursor:pointer;">手入力で科目を追加</summary>
+  <p class="fine-print">成績表の自動解析がうまくいかなかったときに使ってください。</p>
+  <form method="post" action="{{ url_for('academic_manual') }}" class="stack-form">
+    <div class="field-row">
+      <div>
+        <label for="m-term">学期</label>
+        <input id="m-term" type="text" name="term" placeholder="Fall 2025" required>
+      </div>
+      <div>
+        <label for="m-code">科目コード</label>
+        <input id="m-code" type="text" name="code" placeholder="ICS 45C" required>
+      </div>
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="m-title">タイトル（任意）</label>
+        <input id="m-title" type="text" name="title" placeholder="Programming in C++">
+      </div>
+      <div class="field-row">
+        <div>
+          <label for="m-units">単位</label>
+          <input id="m-units" type="text" name="units" placeholder="4" required>
+        </div>
+        <div>
+          <label for="m-grade">成績</label>
+          <input id="m-grade" type="text" name="grade" placeholder="A-" required>
+        </div>
+      </div>
+    </div>
+    <button class="btn" type="submit">追加</button>
+  </form>
+</details>
+
+{% endblock %}
