@@ -47,18 +47,44 @@ async function canvasGet(path) {
     headers: { "Accept": "application/json" },
   });
   if (resp.status === 401 || resp.status === 403) {
-    throw new Error("Canvasにログインしていないようです。Canvasを開いてログインしてください。");
+    throw new Error("You do not appear to be logged into Canvas. Open Canvas and sign in.");
   }
   if (!resp.ok) throw new Error(`Canvas API ${resp.status}`);
   return resp.json();
 }
 
 async function fetchActiveCourses() {
-  const data = await canvasGet("/api/v1/courses?enrollment_state=active&per_page=100");
+  const data = await canvasGet(
+    "/api/v1/courses?enrollment_state=active&per_page=100&include[]=term");
   if (!Array.isArray(data)) return [];
   return data
     .filter((c) => c && c.id)
-    .map((c) => ({ id: c.id, name: c.name || c.course_code || `Course ${c.id}` }));
+    .map((c) => ({
+      id: c.id,
+      name: c.name || c.course_code || `Course ${c.id}`,
+      term: (c.term && c.term.name) || "(no term)",
+      termStart: (c.term && c.term.start_at) || null,
+      termEnd: (c.term && c.term.end_at) || null,
+    }));
+}
+
+// 学期の一覧を返す。今日が期間内の学期には isCurrent を立てる。
+async function fetchTerms() {
+  const courses = await fetchActiveCourses();
+  const byName = new Map();
+  const now = Date.now();
+  for (const c of courses) {
+    if (!byName.has(c.term)) {
+      let isCurrent = false;
+      if (c.termStart && c.termEnd) {
+        const s = Date.parse(c.termStart), e = Date.parse(c.termEnd);
+        isCurrent = !isNaN(s) && !isNaN(e) && now >= s && now <= e;
+      }
+      byName.set(c.term, { name: c.term, count: 0, isCurrent });
+    }
+    byName.get(c.term).count += 1;
+  }
+  return Array.from(byName.values());
 }
 
 async function fetchSyllabus(courseId) {
@@ -148,10 +174,10 @@ function htmlToText(html) {
 async function runSync(reason = "manual") {
   const state = await chrome.storage.sync.get(
     { syncSyllabus: false, token: "" });
-  if (!state.token) return { ok: false, error: "トークン未設定" };
-  if (!state.syncSyllabus) return { ok: false, error: "自動同期がオフです" };
+  if (!state.token) return { ok: false, error: "No token set" };
+  if (!state.syncSyllabus) return { ok: false, error: "Auto sync is off" };
 
-  await setStatus("同期中...");
+  await setStatus("Syncing...");
   try {
     const { courseMap } = await chrome.storage.local.get({ courseMap: null });
 
@@ -165,12 +191,12 @@ async function runSync(reason = "manual") {
       result = await incrementalSync(state.token, courseMap);
     }
 
-    const msg = `✅ ${result.courses}科目を同期しました (${reason}・${result.mode})`;
+    const msg = `✓ Synced ${result.courses} course(s) — ${result.mode} (${reason})`;
     await setStatus(msg);
     await chrome.storage.local.set({ lastSync: new Date().toISOString() });
     return { ok: true, courses: result.courses, mode: result.mode };
   } catch (e) {
-    const msg = "同期に失敗: " + String(e.message || e);
+    const msg = "Sync failed: " + String(e.message || e);
     await setStatus(msg);
     return { ok: false, error: msg };
   }
@@ -184,41 +210,78 @@ async function fullCrawl(token) {
   try { known = await apiGet("/api/extension/state", token); } catch (e) {}
   const alreadySynced = new Set(known.synced_syllabi || []);
 
-  const courses = await fetchActiveCourses();
+  const { selectedTerm } = await chrome.storage.sync.get({ selectedTerm: "" });
+  let courses = await fetchActiveCourses();
+  // 学期が指定されていればその学期だけに絞る(空文字なら全学期)
+  if (selectedTerm) {
+    courses = courses.filter((c) => c.term === selectedTerm);
+  }
   const payload = { courses: [] };
   const courseMap = {};
+  await progressInit("Full crawl", courses.map((c) => c.name));
 
-  for (const course of courses) {
+  for (let i = 0; i < courses.length; i++) {
+    const course = courses[i];
     courseMap[course.name] = course.id;
     const entry = { name: course.name, canvas_id: course.id };
+    const parts = [];
+    let failed = false;
+
+    await progressUpdate(i, "running", "reading syllabus...");
     if (!alreadySynced.has(course.name)) {
       try {
         const syl = await fetchSyllabus(course.id);
         entry.syllabus = syl.text;
         entry.syllabus_links = syl.links;
         entry.syllabus_is_thin = syl.isThin;
-      } catch (e) {}
+        parts.push(syl.isThin ? "syllabus is off-site" : "syllabus");
+        if (syl.links.length) parts.push(`${syl.links.length} link(s)`);
+      } catch (e) { failed = true; }
+    } else {
+      parts.push("syllabus already saved");
     }
-    try { entry.assignments = await fetchAssignments(course.id); } catch (e) {}
+
+    await progressUpdate(i, "running", "reading assignments...");
+    try {
+      entry.assignments = await fetchAssignments(course.id);
+      parts.push(`${entry.assignments.length} assignment(s)`);
+    } catch (e) { failed = true; }
+
     payload.courses.push(entry);
+    await progressUpdate(i, failed ? "error" : "done",
+      failed ? "could not read some data" : parts.join(" · "));
   }
 
   await apiPost("/api/extension/sync", token, payload);
   await chrome.storage.local.set({ courseMap, courseMapSavedAt: Date.now() });
-  return { courses: courses.length, mode: "初回フルクロール" };
+  await progressFinish();
+  return { courses: courses.length, mode: "Full crawl" };
 }
 
 // 2回目以降: 記憶済みの科目IDを使い、課題の更新だけを直接確認する。
 // シラバスは初回で取得済みなので触らない(=そのページには二度と行かない)。
 async function incrementalSync(token, courseMap) {
   const payload = { courses: [] };
-  for (const [name, canvasId] of Object.entries(courseMap)) {
-    const entry = { name, canvas_id: canvasId };
-    try { entry.assignments = await fetchAssignments(canvasId); } catch (e) { continue; }
-    payload.courses.push(entry);
+  const names = Object.keys(courseMap);
+  await progressInit("Incremental (using saved course list)", names);
+
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    await progressUpdate(i, "running", "checking assignments...");
+    const entry = { name, canvas_id: courseMap[name] };
+    try {
+      entry.assignments = await fetchAssignments(courseMap[name]);
+      payload.courses.push(entry);
+      await progressUpdate(i, "done", `${entry.assignments.length} assignment(s)`);
+    } catch (e) {
+      await progressUpdate(i, "error", "could not read assignments");
+    }
   }
+
   await apiPost("/api/extension/sync", token, payload);
-  return { courses: payload.courses.length, mode: "差分更新(記憶した場所へ直接)" };
+  await progressFinish();
+  return { courses: payload.courses.length,
+           mode: "Incremental (using saved course list)" };
 }
 
 // 記憶した科目一覧を強制的に忘れて、次回フルクロールし直す(手動リセット用)
@@ -230,20 +293,56 @@ async function setStatus(text) {
   await chrome.storage.local.set({ lastStatus: text, lastStatusAt: Date.now() });
 }
 
+// ---------------------------------------------------------------- progress
+// The popup mirrors this object live, so the user can watch each course
+// being fetched instead of staring at a single "syncing..." line.
+let progress = null;
+
+async function progressInit(mode, courseNames) {
+  progress = {
+    running: true,
+    mode,
+    total: courseNames.length,
+    completed: 0,
+    courses: courseNames.map((n) => ({ name: n, status: "pending", detail: "" })),
+  };
+  await chrome.storage.local.set({ syncProgress: progress });
+}
+
+async function progressUpdate(index, status, detail) {
+  if (!progress || !progress.courses[index]) return;
+  progress.courses[index].status = status;
+  if (detail !== undefined) progress.courses[index].detail = detail;
+  progress.completed = progress.courses.filter(
+    (c) => c.status === "done" || c.status === "error" || c.status === "skipped").length;
+  await chrome.storage.local.set({ syncProgress: progress });
+}
+
+async function progressFinish() {
+  if (!progress) return;
+  progress.running = false;
+  await chrome.storage.local.set({ syncProgress: progress });
+}
+
 // ---------------------------------------------------------- 起動・定期実行
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_PERIOD_MIN });
 });
-chrome.runtime.onStartup.addListener(() => { runSync("起動時"); });
+chrome.runtime.onStartup.addListener(() => { runSync("on startup"); });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === SYNC_ALARM) runSync("定期実行");
+  if (alarm.name === SYNC_ALARM) runSync("scheduled");
 });
 
 // トグルがオンに切り替わった瞬間にも一度走らせる
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.syncSyllabus &&
-      changes.syncSyllabus.newValue === true) {
-    runSync("オンにした直後");
+  if (area !== "sync") return;
+  // 学期を変えたら、記憶していた科目一覧は無効なので作り直す
+  if (changes.selectedTerm) {
+    forgetCourseMap().then(() => runSync("term changed"));
+    return;
+  }
+  if (changes.syncSyllabus && changes.syncSyllabus.newValue === true) {
+    runSync("just enabled");
   }
 });
 
@@ -251,29 +350,31 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
+      if (msg.action === "getTerms") {
+        try {
+          sendResponse({ ok: true, terms: await fetchTerms() });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e.message || e) });
+        }
+        return;
+      }
       if (msg.action === "syncNow") {
-        sendResponse(await runSync("手動実行"));
+        sendResponse(await runSync("manual"));
         return;
       }
       if (msg.action === "forceRecrawl") {
         await forgetCourseMap();
-        sendResponse(await runSync("再取得"));
+        sendResponse(await runSync("re-fetch"));
         return;
       }
 
       const { token } = await chrome.storage.sync.get({ token: "" });
-      if (!token) throw new Error("トークンが未設定です。");
+      if (!token) throw new Error("No token set.");
 
       if (msg.action === "getAnswer") {
         const data = await apiPost("/api/extension/answer", token, {
           course_name: msg.courseName,
           question_text: msg.questionText,
-        });
-        sendResponse({ ok: true, data });
-      } else if (msg.action === "capturePage") {
-        const data = await apiPost("/api/extension/capture", token, {
-          url: msg.url, title: msg.title, text: msg.text,
-          course_name: msg.courseName || "", kind: msg.kind || "resource",
         });
         sendResponse({ ok: true, data });
       } else if (msg.action === "reportLinks") {
@@ -304,7 +405,7 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
   if (msg.action === "connectToken" && msg.token) {
     chrome.storage.sync.set({ token: msg.token }, () => {
       sendResponse({ ok: true });
-      runSync("接続直後");
+      runSync("just connected");
     });
     return true;
   }

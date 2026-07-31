@@ -71,7 +71,7 @@ async function handlePracticeQuestions(courseName) {
       (res) => {
         if (res && res.ok && res.data && res.data.answer) {
           fillAnswerField(answerEl, res.data.answer);
-          showBanner("📝 下書きを入力しました。内容を確認してから提出してください。");
+          showBanner("📝 Draft filled in. Please review it before submitting.");
         }
       }
     );

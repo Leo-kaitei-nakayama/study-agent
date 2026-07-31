@@ -1,7 +1,8 @@
-// トグル・トークン・手動同期・ページ取り込みのUI。
-// デフォルトは全てオフ ― ユーザーが明示的にオンにしない限り何もしない。
+// Toggles, term selection, token, manual sync, and live sync progress.
+// Everything defaults to off — nothing happens until the user opts in.
 
-const DEFAULTS = { syncSyllabus: false, autoFillAnswers: false, token: "" };
+const DEFAULTS = { syncSyllabus: false, autoFillAnswers: false, token: "",
+                   selectedTerm: "" };
 
 function setStatus(text) {
   document.getElementById("status").textContent = text;
@@ -12,28 +13,78 @@ function loadState() {
     document.getElementById("syncSyllabus").checked = state.syncSyllabus;
     document.getElementById("autoFillAnswers").checked = state.autoFillAnswers;
     document.getElementById("token").value = state.token || "";
-    if (state.token) loadCourses();
+    if (state.token) { loadCourses(); loadTerms(state.selectedTerm); }
   });
-  chrome.storage.local.get({ lastStatus: "" }, (s) => {
-    setStatus(s.lastStatus || "まだ同期していません");
+  chrome.storage.local.get({ lastStatus: "", syncProgress: null }, (s) => {
+    setStatus(s.lastStatus || "Not synced yet");
+    renderProgress(s.syncProgress);   // reopening mid-sync still shows progress
   });
 }
 
+// ------------------------------------------------------- live sync progress
+const ICONS = { pending: "○", running: "◍", done: "✓", error: "✕", skipped: "–" };
+
+function renderProgress(p) {
+  const wrap = document.getElementById("progressWrap");
+  if (!p || !p.courses || p.courses.length === 0) {
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "block";
+
+  document.getElementById("progressMode").textContent =
+    p.running ? (p.mode || "Syncing") : (p.mode || "Sync") + " — finished";
+  document.getElementById("progressCount").textContent =
+    `${p.completed || 0} / ${p.total || p.courses.length}`;
+
+  const pct = p.total ? Math.round(((p.completed || 0) / p.total) * 100) : 0;
+  document.getElementById("progressBar").style.width = pct + "%";
+
+  const list = document.getElementById("progressList");
+  list.textContent = "";
+  for (const c of p.courses) {
+    const row = document.createElement("div");
+    row.className = "prow" + (c.status === "error" ? " err" : "");
+
+    const ic = document.createElement("span");
+    ic.className = "ic" + (c.status === "running" ? " spin" : "");
+    ic.textContent = ICONS[c.status] || "○";
+
+    const right = document.createElement("div");
+    right.style.flex = "1";
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = c.name;
+    right.appendChild(nm);
+    if (c.detail) {
+      const dt = document.createElement("div");
+      dt.className = "dt";
+      dt.textContent = c.detail;
+      right.appendChild(dt);
+    }
+
+    row.appendChild(ic);
+    row.appendChild(right);
+    list.appendChild(row);
+  }
+}
+
+// background.js writes progress to storage.local; mirror it live here
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.syncProgress) renderProgress(changes.syncProgress.newValue);
+  if (changes.lastStatus) setStatus(changes.lastStatus.newValue || "");
+});
+
+// ------------------------------------------------------------------ courses
 function loadCourses() {
   chrome.runtime.sendMessage({ action: "getCourses" }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok) return;
-    const sel = document.getElementById("captureCourse");
-    for (const name of res.courses) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      sel.appendChild(opt);
-    }
     renderPendingLinks(res.pendingLinks || []);
   });
 }
 
-// シラバス本体が外部にある科目を一覧表示。クリックでそのページを開く。
+// Courses whose syllabus really lives on an external site.
 function renderPendingLinks(links) {
   const thin = links.filter((l) => l.is_thin_syllabus);
   const wrap = document.getElementById("pendingWrap");
@@ -46,118 +97,86 @@ function renderPendingLinks(links) {
     row.className = "pending";
     const c = document.createElement("div");
     c.className = "c";
-    c.textContent = (l.course || "科目不明") + " — " + (l.label || "シラバス");
+    c.textContent = (l.course || "Unknown course") + " — " + (l.label || "syllabus");
     const u = document.createElement("div");
     u.className = "u";
     u.textContent = l.url;
     row.appendChild(c);
     row.appendChild(u);
     row.addEventListener("click", () => {
-      // そのページを開き、科目を選択済みにしておく
       chrome.tabs.create({ url: l.url });
-      if (l.course) {
-        const sel = document.getElementById("captureCourse");
-        for (const opt of sel.options) {
-          if (opt.value === l.course) { sel.value = l.course; break; }
-        }
-      }
-      setStatus("ページを開きました。読み込み後に「このページを取り込む」を押してください。");
+      setStatus("Opened the syllabus page.");
     });
     list.appendChild(row);
   }
 }
 
+// -------------------------------------------------------------------- terms
+// Pull the term list from Canvas. If today falls inside a term, mark it current.
+function loadTerms(currentValue) {
+  const sel = document.getElementById("selectedTerm");
+  chrome.runtime.sendMessage({ action: "getTerms" }, (res) => {
+    sel.textContent = "";
+    const all = document.createElement("option");
+    all.value = "";
+    all.textContent = "All terms";
+    sel.appendChild(all);
+
+    if (chrome.runtime.lastError || !res || !res.ok) {
+      sel.value = currentValue || "";
+      return;
+    }
+    const terms = (res.terms || []).sort((a, b) => b.name.localeCompare(a.name));
+    for (const t of terms) {
+      const opt = document.createElement("option");
+      opt.value = t.name;
+      opt.textContent = `${t.name} (${t.count})` + (t.isCurrent ? " · current" : "");
+      sel.appendChild(opt);
+    }
+    if (currentValue) {
+      sel.value = currentValue;
+    } else {
+      const cur = terms.find((t) => t.isCurrent);
+      if (cur) sel.value = cur.name;   // suggested only; saved when you hit Save
+    }
+  });
+}
+
+// ------------------------------------------------------------------ actions
 function saveState() {
   const state = {
     syncSyllabus: document.getElementById("syncSyllabus").checked,
     autoFillAnswers: document.getElementById("autoFillAnswers").checked,
     token: document.getElementById("token").value.trim(),
+    selectedTerm: document.getElementById("selectedTerm").value,
   };
   chrome.storage.sync.set(state, () => {
-    setStatus("保存しました");
+    setStatus("Saved");
     setTimeout(loadState, 1200);
   });
 }
 
-function syncNow() {
-  setStatus("同期中...");
-  chrome.runtime.sendMessage({ action: "syncNow" }, (res) => {
+function runAction(action, busyText) {
+  setStatus(busyText);
+  document.getElementById("syncNow").disabled = true;
+  document.getElementById("recrawl").disabled = true;
+  chrome.runtime.sendMessage({ action }, (res) => {
+    document.getElementById("syncNow").disabled = false;
+    document.getElementById("recrawl").disabled = false;
     if (chrome.runtime.lastError) {
-      setStatus("エラー: " + chrome.runtime.lastError.message);
+      setStatus("Error: " + chrome.runtime.lastError.message);
     } else if (res && res.ok) {
-      setStatus(`✅ ${res.courses} 科目を同期しました`);
+      setStatus(`✓ Synced ${res.courses} course(s)`);
+      loadCourses();
     } else {
-      setStatus("失敗: " + (res && res.error));
+      setStatus("Failed: " + (res && res.error));
     }
   });
-}
-
-// ページから本文を抜き出す関数。activeTab 権限のもと、
-// ユーザーがボタンを押した「今のタブ」でのみ実行される。
-function extractPageContent() {
-  const drop = ["SCRIPT", "STYLE", "NAV", "HEADER", "FOOTER", "ASIDE", "NOINSCRIPT"];
-  const root = document.querySelector("article, main, #content, .content") || document.body;
-  const clone = root.cloneNode(true);
-  clone.querySelectorAll(drop.join(",").toLowerCase()).forEach((el) => el.remove());
-  // textContent なので、折りたたまれて非表示の部分も拾える
-  const text = (clone.textContent || "").replace(/[ \t]+/g, " ")
-                 .replace(/\n\s*\n\s*\n+/g, "\n\n").trim();
-  return { url: location.href, title: document.title, text };
-}
-
-async function capturePage() {
-  setStatus("ページを読み取り中...");
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) { setStatus("タブが見つかりません"); return; }
-
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: extractPageContent,
-    });
-    const payload = results && results[0] && results[0].result;
-    if (!payload || !payload.text) {
-      setStatus("このページからテキストを取得できませんでした");
-      return;
-    }
-
-    setStatus(`送信中... (${payload.text.length.toLocaleString()} 文字)`);
-    chrome.runtime.sendMessage({
-      action: "capturePage",
-      url: payload.url,
-      title: payload.title,
-      text: payload.text,
-      courseName: document.getElementById("captureCourse").value,
-      kind: document.getElementById("captureKind").value,
-    }, (res) => {
-      if (chrome.runtime.lastError) {
-        setStatus("エラー: " + chrome.runtime.lastError.message);
-      } else if (res && res.ok) {
-        const extra = res.data && res.data.resolved_pending_link
-          ? " — 未対応リストから外しました" : "";
-        setStatus(`✅ 取り込みました (${payload.text.length.toLocaleString()} 文字)${extra}`);
-        loadCourses();
-      } else {
-        setStatus("失敗: " + (res && res.error));
-      }
-    });
-  } catch (e) {
-    setStatus("失敗: " + String(e.message || e));
-  }
 }
 
 document.addEventListener("DOMContentLoaded", loadState);
 document.getElementById("save").addEventListener("click", saveState);
-document.getElementById("syncNow").addEventListener("click", syncNow);
-document.getElementById("recrawl").addEventListener("click", () => {
-  setStatus("科目リストを再取得中...");
-  chrome.runtime.sendMessage({ action: "forceRecrawl" }, (res) => {
-    if (res && res.ok) {
-      setStatus(`✅ ${res.courses} 科目を再取得しました`);
-      loadCourses();
-    } else {
-      setStatus("失敗: " + (res && res.error));
-    }
-  });
-});
-document.getElementById("capturePage").addEventListener("click", capturePage);
+document.getElementById("syncNow").addEventListener("click",
+  () => runAction("syncNow", "Syncing..."));
+document.getElementById("recrawl").addEventListener("click",
+  () => runAction("forceRecrawl", "Re-fetching course list..."));

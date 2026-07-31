@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <style>
@@ -21,77 +21,99 @@
           border: 1px solid #185fa5; background: #185fa5; color: white;
           border-radius: 6px; cursor: pointer; }
   button.secondary { background: white; color: #185fa5; }
+  button:disabled { opacity: .5; cursor: default; }
   .status { font-size: 11px; color: #6b6960; margin-top: 10px;
            background: #f1efe8; border-radius: 6px; padding: 8px; min-height: 14px; }
   .notice { font-size: 10px; color: #6b6960; background: #eef2f7;
            border-radius: 6px; padding: 8px; margin-top: 6px; line-height: 1.5; }
+  .warning { font-size: 10px; color: #7a5a00; background: #fff3d6; border-radius: 6px;
+            padding: 8px; margin-top: 10px; }
   .pending { font-size: 11px; padding: 6px 8px; margin-top: 6px;
             background: #fff3d6; border-radius: 6px; cursor: pointer; }
   .pending:hover { background: #ffe9b0; }
   .pending .c { font-weight: 600; }
   .pending .u { color: #6b6960; word-break: break-all; font-size: 10px; }
-  .warning { font-size: 10px; color: #7a5a00; background: #fff3d6; border-radius: 6px;
-            padding: 8px; margin-top: 10px; }
+
+  /* live sync progress */
+  #progressWrap { margin-top: 10px; }
+  .bar { height: 6px; background: #e5e2da; border-radius: 4px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: #185fa5; transition: width .25s; }
+  .phead { display: flex; justify-content: space-between; font-size: 11px;
+           color: #6b6960; margin-bottom: 4px; }
+  .prow { display: flex; align-items: flex-start; gap: 6px; font-size: 11px;
+          padding: 4px 0; border-bottom: 1px solid #efece4; }
+  .prow:last-child { border-bottom: none; }
+  .prow .ic { width: 13px; flex: none; text-align: center; }
+  .prow .nm { flex: 1; word-break: break-word; }
+  .prow .dt { color: #9b988c; font-size: 10px; }
+  .prow.err .dt { color: #b23c3c; }
+  .spin { display: inline-block; animation: sp 1s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
   <h1>Study Agent</h1>
 
-  <h2>A. 自動モード(Canvasのみ)</h2>
+  <h2>A. Auto sync (Canvas)</h2>
   <div class="row">
     <div>
-      <div class="label">Canvas自動同期</div>
-      <div class="desc">科目・シラバス・課題を自動で取得</div>
+      <div class="label">Canvas auto sync</div>
+      <div class="desc">Fetch courses, syllabi and assignments</div>
     </div>
     <input type="checkbox" id="syncSyllabus">
   </div>
   <div class="notice">
-    オンにすると、Canvasのサーバーに自動アクセスの記録が残ります(URL・時刻・ユーザーエージェント等)。
-    大学の管理者はこれを閲覧できます。隠せる仕組みではないので、それを理解した上でお使いください。
-    オフの場合、Canvasへの追加アクセスは一切発生しません。
+    When on, your Canvas activity is recorded on Canvas's servers (URL, timestamp,
+    user agent). University admins can view these logs — this is not something the
+    extension can hide, so please turn it on knowingly. When off, no extra Canvas
+    requests are made at all.
   </div>
-  <button id="syncNow" class="secondary">今すぐ同期</button>
-  <button id="recrawl" class="secondary">科目リストを再取得(新学期など)</button>
+
+  <label style="font-size:12px; display:block; margin-top:10px;">Term</label>
+  <select id="selectedTerm">
+    <option value="">Loading...</option>
+  </select>
+  <div class="notice" style="margin-top:6px;">
+    Only courses in the selected term are synced, so past terms and training
+    courses are left out.
+  </div>
+
+  <button id="syncNow" class="secondary">Sync now</button>
+  <button id="recrawl" class="secondary">Re-fetch course list (new term)</button>
+
+  <div id="progressWrap" style="display:none;">
+    <div class="phead">
+      <span id="progressMode">Syncing</span>
+      <span id="progressCount"></span>
+    </div>
+    <div class="bar"><div id="progressBar"></div></div>
+    <div id="progressList"></div>
+  </div>
 
   <div id="pendingWrap" style="display:none;">
-    <h2>要対応: 外部サイトのシラバス</h2>
+    <h2>Needs attention: syllabus hosted off-site</h2>
     <div class="notice">
-      これらの科目はシラバス本体がCanvasの外にあります。リンクを開いて
-      「このページを取り込む」を押してください。
+      These courses keep their syllabus outside Canvas. Click to open the page.
     </div>
     <div id="pendingList"></div>
   </div>
 
-  <h2>B. 手動取り込み(どのサイトでも)</h2>
-  <div class="notice">
-    今開いているページの内容を取り込みます。ボタンを押した時だけ動作し、
-    他のページや他のサイトには一切アクセスしません。
-  </div>
-  <select id="captureCourse">
-    <option value="">科目を選択(任意)</option>
-  </select>
-  <select id="captureKind">
-    <option value="resource">資料・読み物</option>
-    <option value="requirements">課題の要件</option>
-  </select>
-  <button id="capturePage">このページを取り込む</button>
-
-  <h2>C. 練習問題</h2>
+  <h2>B. Practice questions</h2>
   <div class="row">
     <div>
-      <div class="label">下書きを自動入力</div>
-      <div class="desc">解答欄に自動入力(提出は絶対にしません)</div>
+      <div class="label">Auto-fill drafts</div>
+      <div class="desc">Fills answer boxes — never submits</div>
     </div>
     <input type="checkbox" id="autoFillAnswers">
   </div>
 
-  <h2>設定</h2>
-  <label style="font-size:12px; display:block;">連携トークン</label>
-  <input type="text" id="token" placeholder="ダッシュボードで発行したトークン">
-  <button id="save">保存</button>
+  <h2>Settings</h2>
+  <label style="font-size:12px; display:block;">Connection token</label>
+  <input type="text" id="token" placeholder="Token issued on your dashboard">
+  <button id="save">Save</button>
 
   <div class="status" id="status"></div>
-  <div class="warning">⚠ 提出ボタンはこの拡張機能から絶対に押しません。内容の確認・提出は必ずご自身で行ってください。</div>
+  <div class="warning">⚠ This extension never clicks submit. Always review and submit your work yourself.</div>
 
   <script src="popup.js"></script>
 </body>

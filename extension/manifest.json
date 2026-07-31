@@ -2,8 +2,11 @@
   "manifest_version": 3,
   "name": "Study Agent Canvas Sync",
   "version": "0.1.0",
-  "description": "Canvasを開くだけでシラバスを取得/練習問題の下書きを入力(許可制、提出は絶対にしません)",
-  "permissions": ["storage", "activeTab", "alarms", "scripting"],
+  "description": "Syncs your Canvas courses, syllabi and assignments, and drafts answers for practice questions. Opt-in; never submits anything.",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
   "host_permissions": [
     "https://canvas.eee.uci.edu/*",
     "https://study-agent-500j.onrender.com/*"
@@ -12,12 +15,18 @@
     "service_worker": "background.js"
   },
   "externally_connectable": {
-    "matches": ["https://study-agent-500j.onrender.com/*"]
+    "matches": [
+      "https://study-agent-500j.onrender.com/*"
+    ]
   },
   "content_scripts": [
     {
-      "matches": ["https://canvas.eee.uci.edu/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://canvas.eee.uci.edu/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
