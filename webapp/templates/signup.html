@@ -1,3 +1,4 @@
+{# サインアップ画面。文字列は i18n.py の signup.* / common.* を参照。 #}
 {% extends "base.html" %}
 {% block content %}
 <div class="intro-hero">
@@ -7,20 +8,19 @@
     <span class="logo-chip">DeepSeek</span>
   </div>
   <h1>Study Agent</h1>
-  <p>教科書からノート作成、練習課題のドラフト、Canvasのチェックまで。<br>
-     タスクに合わせて最適なAIに自動で振り分けます。</p>
+  <p>{{ t('signup.tagline')|safe }}</p>
 </div>
 
 <div class="card">
   <form method="post">
-    <label for="email">メールアドレス</label>
+    <label for="email">{{ t('signup.email') }}</label>
     <input type="email" id="email" name="email" placeholder="name@uci.edu" required>
-    <label for="username">ユーザー名</label>
+    <label for="username">{{ t('signup.username') }}</label>
     <input type="text" id="username" name="username" placeholder="leo_z" required>
-    <button class="btn btn-primary btn-block" type="submit">確認コードを送信</button>
+    <button class="btn btn-primary btn-block" type="submit">{{ t('signup.send_code') }}</button>
   </form>
-  <p style="text-align:center; font-size:13px; color:var(--text-2); margin-top:14px;">
-    すでにアカウントをお持ちですか? <a href="{{ url_for('login') }}">ログイン</a>
+  <p class="form-footnote">
+    {{ t('signup.have_account') }} <a href="{{ url_for('login') }}">{{ t('signup.login_link') }}</a>
   </p>
 </div>
 {% endblock %}

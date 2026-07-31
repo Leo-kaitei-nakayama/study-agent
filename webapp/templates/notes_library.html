@@ -1,8 +1,10 @@
+{# 科目ごとのノート一覧(タイル表示)。 #}
 {% extends "base.html" %}
+{% block title %}{{ t('notes.title') }} — Study Agent{% endblock %}
 {% block content %}
 <div class="intro-hero">
-  <h1>ノート一覧</h1>
-  <p>科目ごとに生成したノート・課題ドラフト・クイズ回答をまとめて見られます。</p>
+  <h1>{{ t('notes.title') }}</h1>
+  <p>{{ t('notes.subtitle') }}</p>
 </div>
 
 <div class="notes-grid">
@@ -10,22 +12,20 @@
   <a class="notes-tile" href="{{ url_for('notes_course', course_id=c.id) }}">
     <div class="notes-tile-icon">📘</div>
     <div class="notes-tile-name">{{ c.name }}</div>
-    <div class="notes-tile-count">{{ counts.get(c.id, 0) }} 件</div>
+    <div class="notes-tile-count">{{ t('notes.count', count=counts.get(c.id, 0)) }}</div>
   </a>
   {% endfor %}
 
   {% if uncategorized_count > 0 %}
   <a class="notes-tile" href="{{ url_for('notes_uncategorized') }}">
     <div class="notes-tile-icon">📄</div>
-    <div class="notes-tile-name">未分類</div>
-    <div class="notes-tile-count">{{ uncategorized_count }} 件</div>
+    <div class="notes-tile-name">{{ t('notes.uncategorized') }}</div>
+    <div class="notes-tile-count">{{ t('notes.count', count=uncategorized_count) }}</div>
   </a>
   {% endif %}
 </div>
 
 {% if not courses and uncategorized_count == 0 %}
-<p style="text-align:center; color:var(--text-muted); font-size:14px; margin-top:20px;">
-  まだノートがありません。ダッシュボードからノート作成/課題ドラフト/クイズ回答を実行すると、ここに表示されます。
-</p>
+<p class="empty-centered">{{ t('notes.empty_library') }}</p>
 {% endif %}
 {% endblock %}

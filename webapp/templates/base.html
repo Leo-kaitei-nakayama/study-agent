@@ -1,5 +1,13 @@
+{#
+  全ページの外枠。
+
+  多言語について:
+    文字列は t("キー") で引く(実体は webapp/i18n.py)。
+    右上の言語切り替えは /lang/<code>?next=<今のパス> に飛ぶだけ。
+    切り替え後は同じページに戻り、ログイン済みならプロフィールにも保存される。
+#}
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="{{ current_lang }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,16 +20,29 @@
       <span class="brand-mark">SA</span>
       <span class="brand-name">Study Agent</span>
     </a>
-    {% if session.get('user_id') %}
-    <nav>
-      <a href="{{ url_for('dashboard') }}">ステータス</a>
-      <a href="{{ url_for('notes_library') }}">ノート</a>
-      <a href="{{ url_for('academic') }}">学業</a>
-      <a href="{{ url_for('services') }}">連携</a>
-      <a href="{{ url_for('plans') }}">チャージ</a>
-      <a href="{{ url_for('logout') }}">ログアウト</a>
-    </nav>
-    {% endif %}
+
+    <div class="topbar-right">
+      {% if session.get('user_id') %}
+      <nav>
+        <a href="{{ url_for('dashboard') }}">{{ t('nav.status') }}</a>
+        <a href="{{ url_for('notes_library') }}">{{ t('nav.notes') }}</a>
+        <a href="{{ url_for('academic') }}">{{ t('nav.academic') }}</a>
+        <a href="{{ url_for('services') }}">{{ t('nav.services') }}</a>
+        <a href="{{ url_for('plans') }}">{{ t('nav.credit') }}</a>
+        <a href="{{ url_for('logout') }}">{{ t('nav.logout') }}</a>
+      </nav>
+      {% endif %}
+
+      {# 言語切り替え。JS 無しで動くように、単なるリンクの集まりにしている #}
+      <div class="lang-switch" role="group" aria-label="{{ t('nav.language') }}">
+        {% for code, label in LANGUAGES.items() %}
+        <a class="lang-option {% if code == current_lang %}is-active{% endif %}"
+           href="{{ url_for('set_language', code=code, next=request.full_path) }}"
+           {% if code == current_lang %}aria-current="true"{% endif %}
+           lang="{{ code }}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </div>
   </header>
 
   <main class="container">

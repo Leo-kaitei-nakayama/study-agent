@@ -1,13 +1,15 @@
+{# 確認コードの入力画面。サインアップとログインの両方で使う。 #}
 {% extends "base.html" %}
+{% block title %}{{ t('verify.title') }} — Study Agent{% endblock %}
 {% block content %}
 <div class="intro-hero">
-  <h1>メール確認</h1>
-  <p>届いた6桁のコードを入力してください。</p>
+  <h1>{{ t('verify.title') }}</h1>
+  <p>{{ t('verify.subtitle') }}</p>
 </div>
 
 {% if dev_code %}
 <div class="dev-banner">
-  🚧 開発モード: メール送信は未接続のため、コードをここに表示しています → <strong>{{ dev_code }}</strong>
+  🚧 {{ t('verify.dev_mode') }} <strong>{{ dev_code }}</strong>
 </div>
 {% endif %}
 
@@ -15,7 +17,7 @@
   <form method="post" action="{{ url_for('login_verify') if login else url_for('verify') }}">
     <input class="code-input" type="text" name="code" maxlength="6" pattern="\d{6}"
            placeholder="000000" autofocus required>
-    <button class="btn btn-primary btn-block" type="submit">認証してログイン</button>
+    <button class="btn btn-primary btn-block" type="submit">{{ t('verify.submit') }}</button>
   </form>
 </div>
 {% endblock %}

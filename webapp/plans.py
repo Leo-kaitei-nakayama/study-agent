@@ -7,6 +7,9 @@ AI を呼ぶたびに実際の概算コストが差し引かれる。画面に�
 
   price_usd   … 請求額
   credit_usd  … 残高に入る額。price_usd より多い = まとめ買いの割引分。
+  ※ プランの説明文(blurb)は翻訳対象なので i18n.py の plans.blurb_<key> にある。
+    ここには金額など、言語によって変わらない値だけを置く。
+
   monthly_tokens … 旧トークン方式の名残。subscriptions テーブルの互換のために
                    残しているだけで、利用可否の判定には使っていない
                    (判定は db.has_credit() = 残高が正かどうか)。
@@ -18,21 +21,18 @@ PLANS = {
         "price_usd": 5,
         "credit_usd": 5.00,
         "browse_allowed": False,
-        "blurb": "まずは試す。ノート作成 100 回ぶんくらい。",
     },
     "standard": {
         "label": "Standard",
         "price_usd": 15,
         "credit_usd": 16.50,      # +10% ボーナス
         "browse_allowed": True,
-        "blurb": "毎週の課題ドラフト・クイズ支援まで。+10% ボーナス。",
     },
     "pro": {
         "label": "Pro",
         "price_usd": 35,
         "credit_usd": 42.00,      # +20% ボーナス
         "browse_allowed": True,
-        "blurb": "Claude 優先で高精度。使い切らない量。+20% ボーナス。",
     },
 }
 

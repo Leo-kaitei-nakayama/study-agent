@@ -1,27 +1,28 @@
+{# 初回のプロフィール入力。ここで選ばれている言語がプロフィールに保存される。 #}
 {% extends "base.html" %}
+{% block title %}{{ t('onboarding.title') }} — Study Agent{% endblock %}
 {% block content %}
 <div class="intro-hero">
-  <h1>はじめまして</h1>
-  <p>いくつか教えてください。あとから設定で変更できます。</p>
+  <h1>{{ t('onboarding.title') }}</h1>
+  <p>{{ t('onboarding.subtitle') }}</p>
 </div>
 
 <div class="card">
   <form method="post">
-    <label for="preferred_name">何と呼べばいいですか?</label>
+    <label for="preferred_name">{{ t('onboarding.name_q') }}</label>
     <input type="text" id="preferred_name" name="preferred_name" placeholder="Leo" required>
 
-    <label for="school">学校</label>
+    <label for="school">{{ t('onboarding.school') }}</label>
     <input type="text" id="school" name="school" placeholder="UC Irvine">
 
-    <label for="major">専攻</label>
+    <label for="major">{{ t('onboarding.major') }}</label>
     <input type="text" id="major" name="major" placeholder="Business Information Management / CS">
 
-    <label for="classes">今学期の科目(1行に1つ)</label>
+    <label for="classes">{{ t('onboarding.classes') }}</label>
     <textarea id="classes" name="classes" rows="5"
-      placeholder="MGMT 109&#10;CS 178&#10;STATS 7"
-      style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius); font-size:14px; background:var(--bg); font-family:inherit;"></textarea>
+      placeholder="MGMT 109&#10;CS 178&#10;STATS 7"></textarea>
 
-    <button class="btn btn-primary btn-block" type="submit">はじめる</button>
+    <button class="btn btn-primary btn-block" type="submit">{{ t('onboarding.start') }}</button>
   </form>
 </div>
 {% endblock %}
