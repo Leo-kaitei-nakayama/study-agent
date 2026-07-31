@@ -207,6 +207,89 @@ def notes_download(note_id):
                      download_name=row["source_name"])
 
 
+# ------------------------------------------------------------ extension
+@app.route("/extension/token", methods=["POST"])
+@login_required
+def generate_extension_token():
+    """新しい拡張機能連携トークンを発行(既存は失効)。生の値はこの応答でしか見えない。"""
+    import hashlib
+    import secrets
+
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    db.create_extension_token(session["user_id"], token_hash)
+    return _render_dashboard(new_extension_token=raw)
+
+
+def _extension_user_id():
+    """Authorization: Bearer <token> からuser_idを引く。無効ならNone。"""
+    import hashlib
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[len("Bearer "):].strip()
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    return db.get_user_by_extension_token_hash(token_hash)
+
+
+@app.route("/api/extension/syllabus", methods=["POST"])
+def api_extension_syllabus():
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+
+    payload = request.get_json(silent=True) or {}
+    course_name = (payload.get("course_name") or "").strip()
+    text = (payload.get("text") or "").strip()
+    if not course_name or not text:
+        return {"error": "course_name and text are required"}, 400
+
+    course_id = db.add_course(user_id, course_name)
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    filename = f"{user_id}_{stamp}_syllabus_{course_name}.md".replace(" ", "_")
+    (OUTPUT_DIR / filename).write_text(text, encoding="utf-8")
+    db.add_note(user_id, course_id, "syllabus", filename, f"{course_name} syllabus")
+    return {"status": "ok"}
+
+
+@app.route("/api/extension/answer", methods=["POST"])
+def api_extension_answer():
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+
+    payload = request.get_json(silent=True) or {}
+    course_name = (payload.get("course_name") or "").strip()
+    question_text = (payload.get("question_text") or "").strip()
+    if not question_text:
+        return {"error": "question_text is required"}, 400
+
+    sub = db.get_subscription(user_id)
+    if not sub:
+        return {"error": "no active plan"}, 402
+
+    cb = _make_usage_callback(user_id, "extension_answer")
+    routing = _user_routing(user_id)
+    system = (
+        "あなたは大学の練習問題を手伝うチューターです。以下の設問に対する解答の"
+        "下書きを作成してください。解答のみを簡潔に出力し、前置きは不要です。"
+        "出力言語は設問と同じ言語にしてください。")
+    try:
+        answer = study_llm.complete(system, question_text, max_tokens=1000,
+                                    api_keys=MASTER_KEYS, usage_callback=cb,
+                                    routing=routing)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}, 500
+
+    if course_name:
+        course_id = db.add_course(user_id, course_name)
+        db.add_note(user_id, course_id, "practice_answer",
+                   f"_inline_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.md",
+                   question_text[:60])
+    return {"answer": answer}
+
+
 # ------------------------------------------------------------------ plans
 @app.route("/plans", methods=["GET", "POST"])
 @login_required
@@ -226,6 +309,10 @@ def plans():
 @app.route("/dashboard")
 @login_required
 def dashboard():
+    return _render_dashboard()
+
+
+def _render_dashboard(new_extension_token: str | None = None):
     user = db.get_user(session["user_id"])
     profile = db.get_profile(session["user_id"])
     if not profile:
@@ -239,7 +326,8 @@ def dashboard():
 
     return render_template("dashboard.html", user=user, profile=profile, sub=sub,
                           plan=PLANS[sub["plan"]], usage_count=len(usage),
-                          cost=cost, courses=courses)
+                          cost=cost, courses=courses,
+                          new_extension_token=new_extension_token)
 
 
 def _estimate_cost(usage_rows) -> float:

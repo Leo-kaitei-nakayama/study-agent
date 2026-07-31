@@ -2,6 +2,13 @@
 
 - config.yaml の allowed_domains でアクセス先を制限できる(空なら制限なし)
 - ガードレール: 提出・採点確定などの不可逆な操作はエージェントに禁止させる
+- user_data_dir でブラウザプロファイル(Cookie含む)を保存・再利用する。
+  一度手動で2段階認証を突破すれば、Canvasが「このデバイスを記憶」している間は
+  次回以降ログイン不要で動く。
+- このモジュールはローカル(Leoのラップトップ)での実行を前提にしている。
+  headless: false で実ブラウザ画面が開くので、2FAが必要な場面ではLeo自身が
+  その画面で直接コードを入力する。Renderなどの画面のないサーバー上では
+  2FAを人間が突破できないため、この機能は使えない。
 """
 import asyncio
 from pathlib import Path
@@ -13,7 +20,9 @@ _GUARDRAIL = (
     "- Never click Submit / Turn in / 提出 / 送信 or any button that finalizes "
     "a graded submission. Stop and report instead.\n"
     "- Never make purchases or change account settings.\n"
-    "- If login is required and you are not already logged in, stop and ask the user."
+    "- If a login page appears and no saved session works, STOP and tell the user "
+    "to log in manually in this browser window (including any 2FA prompt), then "
+    "ask them to say 'continue' once they're logged in."
 )
 
 
@@ -34,6 +43,7 @@ async def run_browser_task(task: str, config_path: str = "config.yaml",
     cfg = load_config(config_path)
     allowed = cfg.get("allowed_domains") or None
     model = cfg.get("model", "claude-sonnet-4-6")
+    user_data_dir = cfg.get("user_data_dir")  # 例: "./canvas_profile"
 
     # 保存済みログイン情報を sensitive_data として渡す。
     # browser-use はLLMにプレースホルダ名だけを見せ、実際の値はブラウザにのみ注入する。
@@ -62,6 +72,8 @@ async def run_browser_task(task: str, config_path: str = "config.yaml",
     session = BrowserSession(
         allowed_domains=allowed,      # 例: ["canvas.eee.uci.edu", "*.uci.edu"]
         headless=cfg.get("headless", False),
+        user_data_dir=user_data_dir,  # Cookie保存先。Noneならプロファイル保存しない
+        keep_alive=False,
     )
     agent = Agent(
         task=full_task,
@@ -81,3 +93,19 @@ def _slug(site: str) -> str:
 def browse(task: str, config_path: str = "config.yaml",
            course: str | None = None) -> str:
     return asyncio.run(run_browser_task(task, config_path, course=course))
+
+
+def fetch_canvas_syllabus(course_name: str, config_path: str = "config.yaml") -> str:
+    """指定した科目のCanvasシラバスページから本文を抽出して返す。"""
+    task = (
+        f"Go to Canvas (canvas.eee.uci.edu). If not already logged in, log in "
+        f"using the saved credentials if available, or wait for the user to log "
+        f"in manually (including 2FA). Once logged in, find the course named "
+        f"approximately '{course_name}' in the course list — it may not match "
+        f"exactly, use your judgment to find the closest match. Open that "
+        f"course's Syllabus page (usually in the left sidebar navigation). "
+        f"Extract and return the FULL text content of the syllabus page, "
+        f"including any assignment/grading policy tables. Do not summarize — "
+        f"return the actual text as your final result."
+    )
+    return browse(task, config_path=config_path, course=course_name)

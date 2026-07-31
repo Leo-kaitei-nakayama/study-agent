@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<style>
+  body { width: 280px; font-family: -apple-system, sans-serif; padding: 14px;
+        color: #1f1e1a; background: #faf9f6; }
+  h1 { font-size: 14px; margin: 0 0 12px; }
+  .row { display: flex; justify-content: space-between; align-items: center;
+        padding: 8px 0; border-bottom: 1px solid #e5e2da; }
+  .row:last-of-type { border-bottom: none; }
+  .row .label { font-size: 12px; }
+  .row .desc { font-size: 10px; color: #6b6960; margin-top: 2px; }
+  input[type=checkbox] { width: 36px; height: 20px; }
+  input[type=text] { width: 100%; padding: 6px 8px; font-size: 12px;
+                     border: 1px solid #e5e2da; border-radius: 6px; margin-top: 4px; }
+  button { width: 100%; padding: 8px; margin-top: 10px; font-size: 12px;
+          border: 1px solid #185fa5; background: #185fa5; color: white;
+          border-radius: 6px; cursor: pointer; }
+  .status { font-size: 10px; color: #6b6960; margin-top: 8px; text-align: center; }
+  .warning { font-size: 10px; color: #7a5a00; background: #fff3d6; border-radius: 6px;
+            padding: 8px; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <h1>Study Agent — Canvas連携</h1>
+
+  <div class="row">
+    <div>
+      <div class="label">シラバスを自動取得</div>
+      <div class="desc">シラバスページを開くと自動で送信</div>
+    </div>
+    <input type="checkbox" id="syncSyllabus">
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="label">練習問題の下書きを自動入力</div>
+      <div class="desc">解答欄に自動入力(提出は絶対にしません)</div>
+    </div>
+    <input type="checkbox" id="autoFillAnswers">
+  </div>
+
+  <label style="font-size:12px; display:block; margin-top:10px;">連携トークン</label>
+  <input type="text" id="token" placeholder="ダッシュボードで発行したトークン">
+  <button id="save">保存</button>
+
+  <div class="warning">⚠ 提出ボタンはこの拡張機能から絶対に押しません。内容の確認・提出は必ずご自身で行ってください。</div>
+  <div class="status" id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

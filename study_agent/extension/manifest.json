@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Study Agent Canvas Sync",
+  "version": "0.1.0",
+  "description": "Canvasを開くだけでシラバスを取得/練習問題の下書きを入力(許可制、提出は絶対にしません)",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://canvas.eee.uci.edu/*",
+    "https://study-agent-500j.onrender.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "externally_connectable": {
+    "matches": ["https://study-agent-500j.onrender.com/*"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://canvas.eee.uci.edu/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Study Agent"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -107,6 +107,19 @@ def init_db():
             source_name TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS canvas_accounts (
+            user_id INTEGER PRIMARY KEY REFERENCES users(id),
+            base_url TEXT NOT NULL,
+            encrypted_token TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS extension_tokens (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            token_hash TEXT UNIQUE NOT NULL,
+            created_at TEXT NOT NULL,
+            last_used_at TEXT
+        );
         """)
 
 
@@ -317,3 +330,47 @@ def get_note(user_id: int, note_id: int):
     with _conn() as c:
         return c.execute("SELECT * FROM notes WHERE id=%s AND user_id=%s",
                          (note_id, user_id)).fetchone()
+
+
+# --------------------------------------------------------------- canvas
+def set_canvas_account(user_id: int, base_url: str, encrypted_token: str):
+    with _conn() as c:
+        c.execute("""
+            INSERT INTO canvas_accounts (user_id, base_url, encrypted_token, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+                base_url=EXCLUDED.base_url,
+                encrypted_token=EXCLUDED.encrypted_token
+        """, (user_id, base_url, encrypted_token, datetime.utcnow().isoformat()))
+
+
+def get_canvas_account(user_id: int):
+    with _conn() as c:
+        return c.execute("SELECT * FROM canvas_accounts WHERE user_id=%s",
+                         (user_id,)).fetchone()
+
+
+def delete_canvas_account(user_id: int):
+    with _conn() as c:
+        c.execute("DELETE FROM canvas_accounts WHERE user_id=%s", (user_id,))
+
+
+# ----------------------------------------------------------- extension token
+def create_extension_token(user_id: int, token_hash: str):
+    """既存のトークンを失効させ、新しい1つだけを有効にする(1ユーザー1トークン)。"""
+    with _conn() as c:
+        c.execute("DELETE FROM extension_tokens WHERE user_id=%s", (user_id,))
+        c.execute("""INSERT INTO extension_tokens (user_id, token_hash, created_at)
+                     VALUES (%s, %s, %s)""",
+                  (user_id, token_hash, datetime.utcnow().isoformat()))
+
+
+def get_user_by_extension_token_hash(token_hash: str):
+    with _conn() as c:
+        row = c.execute(
+            "SELECT user_id FROM extension_tokens WHERE token_hash=%s",
+            (token_hash,)).fetchone()
+        if row:
+            c.execute("UPDATE extension_tokens SET last_used_at=%s WHERE token_hash=%s",
+                     (datetime.utcnow().isoformat(), token_hash))
+        return row["user_id"] if row else None

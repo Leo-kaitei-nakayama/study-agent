@@ -59,6 +59,57 @@
 </div>
 
 <div class="card">
+  <div class="label" style="font-size:13px; color:var(--text-2); margin-bottom:8px;">Chrome拡張機能との連携</div>
+
+  {% if new_extension_token %}
+  <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">
+    トークンを発行しました。下のボタンで拡張機能に自動接続するか、表示された値を手動でポップアップに貼り付けてください(この値は今しか表示されません)。
+  </p>
+  <div id="ext-status" style="font-size:12px; margin-bottom:8px;"></div>
+  <button class="btn" type="button" onclick="connectExtension()">拡張機能に自動接続</button>
+  <p style="font-size:11px; color:var(--text-muted); margin-top:8px; word-break:break-all;">
+    手動用トークン: <code>{{ new_extension_token }}</code>
+  </p>
+  <script>
+    function getExtensionId() {
+      let id = localStorage.getItem("sa_extension_id");
+      if (!id) {
+        id = prompt("chrome://extensions で表示されるこの拡張機能のIDを入力してください:");
+        if (id) localStorage.setItem("sa_extension_id", id.trim());
+      }
+      return id;
+    }
+    function connectExtension() {
+      const statusEl = document.getElementById("ext-status");
+      if (!window.chrome || !chrome.runtime || !chrome.runtime.sendMessage) {
+        statusEl.textContent = "この画面からは自動接続できません。手動でトークンを貼り付けてください。";
+        return;
+      }
+      const extId = getExtensionId();
+      if (!extId) { statusEl.textContent = "拡張機能IDが未入力です。"; return; }
+      chrome.runtime.sendMessage(extId, { action: "connectToken", token: "{{ new_extension_token }}" },
+        (res) => {
+          if (chrome.runtime.lastError) {
+            statusEl.textContent = "接続失敗: " + chrome.runtime.lastError.message + "(拡張機能IDを確認してください)";
+          } else if (res && res.ok) {
+            statusEl.textContent = "✅ 拡張機能に自動接続しました";
+          } else {
+            statusEl.textContent = "接続失敗: " + (res && res.error);
+          }
+        });
+    }
+  </script>
+  {% else %}
+  <p style="font-size:12px; color:var(--text-muted); margin:0 0 10px;">
+    発行すると既存のトークンは失効します。
+  </p>
+  <form method="post" action="{{ url_for('generate_extension_token') }}">
+    <button class="btn" type="submit">新しいトークンを発行</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
   <div class="label" style="font-size:13px; color:var(--text-2); margin-bottom:8px;">タスクを実行</div>
   <div class="action-grid">
     <form method="post" action="{{ url_for('task_notes') }}" enctype="multipart/form-data">
