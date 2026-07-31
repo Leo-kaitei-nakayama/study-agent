@@ -1,0 +1,113 @@
+{#
+  連携サービス(ログイン情報)の画面。
+
+  役割: 授業で使うサイト(Perusall / 出版社サイト / Zybooks など)の
+  ユーザー名とパスワードを登録しておくと、エージェントが次回から自分で
+  ログインして資料を取りに行ける。
+
+  安全上の約束:
+    - パスワードは crypto.encrypt() を通してから DB に入る
+    - 一度保存したパスワードはこの画面にも二度と表示しない(上書きのみ)
+    - Canvas は Chrome 拡張機能が学生のログイン済みセッションを使うので、
+      ここに登録する必要はない
+#}
+{% extends "base.html" %}
+{% block title %}連携サービス — Study Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>連携サービス</h1>
+  <p>授業で使うサイトのログイン情報を登録しておくと、エージェントが自分でログインして資料を取りに行きます。</p>
+</div>
+
+{% if not crypto_ready %}
+<div class="warn-banner">
+  サーバーに <code>CREDENTIAL_KEY</code> が設定されていないため、パスワードを暗号化して保存できません。
+  管理者が環境変数を設定するまで、新しい登録はできません。
+</div>
+{% endif %}
+
+<div class="card">
+  <h2 class="card-title">登録済みのサイト</h2>
+  {% if credentials %}
+  <table class="data-table">
+    <thead>
+      <tr><th>サイト</th><th>ユーザー名</th><th>科目</th><th>最終利用</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for c in credentials %}
+      <tr>
+        <td>
+          <div class="cell-strong">{{ c.label }}</div>
+          <a class="cell-sub" href="{{ c.site_url }}" target="_blank" rel="noopener">{{ c.site_url }}</a>
+        </td>
+        <td>{{ c.username }}</td>
+        <td>{{ c.course_name or "—" }}</td>
+        <td class="cell-muted">{{ c.last_used_at[:10] if c.last_used_at else "未使用" }}</td>
+        <td class="cell-actions">
+          <form method="post" action="{{ url_for('services_delete', cred_id=c.id) }}"
+                onsubmit="return confirm('{{ c.label }} のログイン情報を削除しますか?');">
+            <button class="btn btn-sm btn-danger" type="submit">削除</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="fine-print">パスワードは暗号化して保存されているため表示できません。変更したいときは同じ URL で登録し直してください。</p>
+  {% else %}
+  <p class="empty-state">まだ登録されたサイトはありません。</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2 class="card-title">サイトを追加</h2>
+  <form method="post" action="{{ url_for('services_add') }}" class="stack-form">
+    <div class="field-row">
+      <div>
+        <label for="svc-label">サイト名</label>
+        <input id="svc-label" type="text" name="label" placeholder="Perusall" required
+               {% if not crypto_ready %}disabled{% endif %}>
+      </div>
+      <div>
+        <label for="svc-url">URL</label>
+        <input id="svc-url" type="text" name="site_url" placeholder="https://app.perusall.com" required
+               {% if not crypto_ready %}disabled{% endif %}>
+      </div>
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="svc-user">ユーザー名 / メールアドレス</label>
+        <input id="svc-user" type="text" name="username" autocomplete="off" required
+               {% if not crypto_ready %}disabled{% endif %}>
+      </div>
+      <div>
+        <label for="svc-pass">パスワード</label>
+        <input id="svc-pass" type="password" name="password" autocomplete="new-password" required
+               {% if not crypto_ready %}disabled{% endif %}>
+      </div>
+    </div>
+    <div>
+      <label for="svc-course">関連する科目(任意)</label>
+      <select id="svc-course" name="course" {% if not crypto_ready %}disabled{% endif %}>
+        <option value="__none__">指定しない</option>
+        {% for c in courses %}<option value="{{ c.name }}">{{ c.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-primary" type="submit" {% if not crypto_ready %}disabled{% endif %}>
+      保存する
+    </button>
+  </form>
+</div>
+
+<div class="card note-card">
+  <h2 class="card-title">安全性について</h2>
+  <ul class="bullet-list">
+    <li>パスワードは保存する前にサーバー側で暗号化されます。データベースを直接見ても内容は読めません。</li>
+    <li>復号するのは、エージェントが実際にそのサイトへログインする瞬間だけです。AI へのプロンプトにパスワードが載ることはありません。</li>
+    <li><strong>Canvas はここに登録しないでください。</strong> Chrome 拡張機能があなたのログイン済みセッションをそのまま使います。</li>
+    <li>エージェントは資料の取得だけを行い、提出・送信・購入は行いません。</li>
+  </ul>
+</div>
+
+{% endblock %}

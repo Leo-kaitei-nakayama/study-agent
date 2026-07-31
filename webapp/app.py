@@ -20,9 +20,12 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # study_agent パッケージを見える化
 
+import crypto
 import db
 import mailer
 import payments
+import school as school_info
+import transcript as transcript_parser
 from plans import DEFAULT_PLAN, PLANS
 from study_agent import llm as study_llm
 
@@ -454,15 +457,167 @@ def api_extension_answer():
 @app.route("/plans", methods=["GET", "POST"])
 @login_required
 def plans():
+    """プラン購入 = クレジットのチャージ。決済は payments.py のモック。"""
+    user_id = session["user_id"]
     if request.method == "POST":
         plan = request.form["plan"]
-        ok = payments.charge(session["user_id"], plan, PLANS[plan]["price_usd"])
+        if plan not in PLANS:
+            flash("不明なプランです")
+            return redirect(url_for("plans"))
+        ok = payments.charge(user_id, plan, PLANS[plan]["price_usd"])
         if ok:
-            db.set_plan(session["user_id"], plan)
-            flash(f"{PLANS[plan]['label']} プランを有効化しました")
+            db.set_plan(user_id, plan)   # プラン名の記録(利用可否の判定には使わない)
+            new_balance = db.add_credit(user_id, PLANS[plan]["credit_usd"],
+                                        f"チャージ: {PLANS[plan]['label']}")
+            flash(f"${PLANS[plan]['credit_usd']:.2f} をチャージしました"
+                  f"(残高 ${new_balance:.2f})")
             return redirect(url_for("dashboard"))
         flash("決済に失敗しました")
-    return render_template("plans.html", plans=PLANS, default=DEFAULT_PLAN)
+    return render_template("plans.html", plans=PLANS, default=DEFAULT_PLAN,
+                          balance=db.get_balance(user_id))
+
+
+# ------------------------------------------------------- 連携サービス(ログイン情報)
+@app.route("/services")
+@login_required
+def services():
+    """授業で使うサイトのログイン情報を一覧・登録する画面。
+
+    ここに登録された username/password を使って、エージェントが後から
+    そのサイトに自分でログインして情報を取りに行く。パスワードは
+    crypto.encrypt() を通してから DB に入れ、画面には二度と表示しない。
+    """
+    user_id = session["user_id"]
+    return render_template(
+        "services.html",
+        credentials=db.list_site_credentials(user_id),
+        courses=db.list_user_courses(user_id),
+        crypto_ready=crypto.is_configured())
+
+
+@app.route("/services/add", methods=["POST"])
+@login_required
+def services_add():
+    user_id = session["user_id"]
+    if not crypto.is_configured():
+        flash("サーバーに CREDENTIAL_KEY が設定されていないため、"
+              "パスワードを安全に保存できません。管理者に連絡してください。")
+        return redirect(url_for("services"))
+
+    label = request.form.get("label", "").strip()
+    site_url = request.form.get("site_url", "").strip()
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+    course_choice = request.form.get("course", "").strip()
+
+    if not (label and site_url and username and password):
+        flash("サイト名・URL・ユーザー名・パスワードをすべて入力してください")
+        return redirect(url_for("services"))
+    if not site_url.startswith(("http://", "https://")):
+        site_url = "https://" + site_url
+
+    course_id = None
+    if course_choice and course_choice != "__none__":
+        course_id = db.add_course(user_id, course_choice)
+
+    db.add_site_credential(user_id, label, site_url, username,
+                           crypto.encrypt(password), course_id)
+    flash(f"{label} のログイン情報を保存しました")
+    return redirect(url_for("services"))
+
+
+@app.route("/services/delete/<int:cred_id>", methods=["POST"])
+@login_required
+def services_delete(cred_id):
+    db.delete_site_credential(session["user_id"], cred_id)
+    flash("ログイン情報を削除しました")
+    return redirect(url_for("services"))
+
+
+# ------------------------------------------------------------ 学業 / GPA
+@app.route("/academic")
+@login_required
+def academic():
+    """成績表アップロード → GPA と卒業単位までの進捗を表示する画面。
+
+    履修データは transcript_courses テーブルに入っていて、GPA の計算そのものは
+    transcript.py が行う(この関数は取り出して渡すだけ)。
+    """
+    user_id = session["user_id"]
+    profile = db.get_profile(user_id)
+    if not profile:
+        return redirect(url_for("onboarding"))
+
+    sch = school_info.get_school(profile["school"])
+    rows = db.list_transcript_courses(user_id)
+    return render_template(
+        "academic.html",
+        school=sch,
+        meta=db.get_transcript_meta(user_id),
+        summary=transcript_parser.compute_gpa(rows, profile["school"]),
+        terms=transcript_parser.group_by_term(rows, profile["school"]),
+        has_data=bool(rows))
+
+
+@app.route("/academic/upload", methods=["POST"])
+@login_required
+def academic_upload():
+    """Student Access で保存した Unofficial Transcript (.html) を取り込む。"""
+    user_id = session["user_id"]
+    profile = db.get_profile(user_id)
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash("成績表の .html ファイルを選択してください")
+        return redirect(url_for("academic"))
+
+    raw = f.read()
+    try:
+        html = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # Student Access の保存 HTML は環境によって cp1252 などになることがある
+        html = raw.decode("latin-1", errors="replace")
+
+    result = transcript_parser.parse_transcript_html(
+        html, profile["school"] if profile else None)
+    if result["error"]:
+        flash(result["error"])
+        return redirect(url_for("academic"))
+
+    db.replace_transcript(user_id, f.filename, result["courses"])
+    flash(f"{len(result['courses'])} 件の履修を取り込みました"
+          f"({', '.join(result['terms'])})")
+    return redirect(url_for("academic"))
+
+
+@app.route("/academic/manual", methods=["POST"])
+@login_required
+def academic_manual():
+    """HTML の解析に失敗したとき用に、履修を 1 件ずつ手入力で足す。"""
+    user_id = session["user_id"]
+    term = request.form.get("term", "").strip()
+    code = request.form.get("code", "").strip().upper()
+    title = request.form.get("title", "").strip()
+    grade = request.form.get("grade", "").strip().upper()
+    try:
+        units = float(request.form.get("units", ""))
+    except ValueError:
+        flash("単位数は数値で入力してください")
+        return redirect(url_for("academic"))
+
+    if not (term and code and grade) or units <= 0:
+        flash("学期・科目コード・単位数・成績を入力してください")
+        return redirect(url_for("academic"))
+
+    db.add_transcript_course(user_id, term, code, title, units, grade)
+    flash(f"{code} を追加しました")
+    return redirect(url_for("academic"))
+
+
+@app.route("/academic/delete/<int:row_id>", methods=["POST"])
+@login_required
+def academic_delete(row_id):
+    db.delete_transcript_course(session["user_id"], row_id)
+    return redirect(url_for("academic"))
 
 
 # -------------------------------------------------------------- dashboard
@@ -473,21 +628,28 @@ def dashboard():
 
 
 def _render_dashboard(new_extension_token: str | None = None):
-    user = db.get_user(session["user_id"])
-    profile = db.get_profile(session["user_id"])
+    user_id = session["user_id"]
+    user = db.get_user(user_id)
+    profile = db.get_profile(user_id)
     if not profile:
         return redirect(url_for("onboarding"))
-    sub = db.get_subscription(session["user_id"])
+    sub = db.get_subscription(user_id)
     if not sub:
         return redirect(url_for("plans"))
-    usage = db.usage_this_cycle(session["user_id"])
-    cost = _estimate_cost(usage)
-    courses = db.list_user_courses(session["user_id"])
+    usage = db.usage_this_cycle(user_id)
+    courses = db.list_user_courses(user_id)
+    counts = db.notes_count_by_course(user_id)
 
-    return render_template("dashboard.html", user=user, profile=profile, sub=sub,
-                          plan=PLANS[sub["plan"]], usage_count=len(usage),
-                          cost=cost, courses=courses,
-                          new_extension_token=new_extension_token)
+    return render_template(
+        "dashboard.html", user=user, profile=profile, sub=sub,
+        plan=PLANS[sub["plan"]],
+        usage_count=len(usage),
+        cost=_estimate_cost(usage),          # 今サイクルの利用額(参考表示)
+        balance=db.get_balance(user_id),     # 画面に出すのはトークンではなく残高
+        courses=courses, counts=counts,
+        credentials=db.list_site_credentials(user_id),
+        school=school_info.get_school(profile["school"]),
+        new_extension_token=new_extension_token)
 
 
 def _estimate_cost(usage_rows) -> float:
@@ -500,22 +662,31 @@ def _estimate_cost(usage_rows) -> float:
 
 # --------------------------------------------------------------- AI tasks
 def _make_usage_callback(user_id: int, task_name: str):
+    """LLM 呼び出しごとに「利用履歴の記録」と「クレジットの引き落とし」を行う。
+
+    study_llm 側が (provider, 入力トークン, 出力トークン) で呼んでくれるので、
+    ここで実勢価格から USD を出して残高から引く。学生に見せる数字はこの USD。
+    """
     def cb(provider, tin, tout):
         db.deduct_tokens(user_id, provider, tin, tout, task_name)
+        db.charge_credit(user_id, _token_cost(provider, tin, tout),
+                         f"{task_name} ({provider})")
     return cb
 
 
+def _token_cost(provider: str, tokens_in: int, tokens_out: int) -> float:
+    """トークン数 → USD。単価は study_agent/llm.py の PROVIDERS[...]["price"]。"""
+    price_in, price_out = study_llm.PROVIDERS[provider]["price"]
+    return tokens_in / 1e6 * price_in + tokens_out / 1e6 * price_out
+
+
 def _user_routing(user_id: int) -> dict:
-    sub = db.get_subscription(user_id)
-    # 残トークンが尽きたプロバイダは既定ルーティングから外す(枯渇時は他へ回す)
-    routing = dict(DEFAULT_ROUTING)
-    for task, provider in list(routing.items()):
-        if sub and sub[f"remaining_{provider}"] <= 0:
-            for alt in ("openai", "claude"):  # DeepSeekは今は未使用
-                if sub[f"remaining_{alt}"] > 0:
-                    routing[task] = alt
-                    break
-    return routing
+    """タスク種別 → 使うプロバイダ。
+
+    クレジット方式ではプロバイダごとの上限が無いので、既定の振り分けを
+    そのまま使う(実行してよいかどうかは db.has_credit() で別に判定する)。
+    """
+    return dict(DEFAULT_ROUTING)
 
 
 @app.route("/task/notes", methods=["POST"])
@@ -538,6 +709,10 @@ def task_quiz():
 
 def _run_task(kind: str):
     user_id = session["user_id"]
+    if not db.has_credit(user_id):
+        flash("クレジット残高がありません。チャージしてから実行してください。")
+        return redirect(url_for("plans"))
+
     f = request.files.get("file")
     if not f or not f.filename:
         flash("ファイルを選択してください")
