@@ -80,20 +80,6 @@
       {{ t('academic.planner_btn', planner=school.planner_name) }}
     </a>
 
-    <details class="inline-upload">
-      <summary class="btn">{{ t('academic.schedule_btn') }}</summary>
-      <div class="inline-upload-body">
-        <ol class="steps-list">
-          {% for key in school.schedule_help_keys %}<li>{{ t(key) }}</li>{% endfor %}
-        </ol>
-        <form method="post" action="{{ url_for('academic_schedule') }}"
-              enctype="multipart/form-data" class="inline-form">
-          <input type="file" name="file" accept=".html,.htm" required>
-          <button class="btn btn-primary" type="submit">{{ t('common.upload') }}</button>
-        </form>
-        <p class="fine-print">{{ t('academic.schedule_note') }}</p>
-      </div>
-    </details>
 
     {# 取り込み済みなら、成績表の取り込みは右端の小さなボタンに畳む #}
     {% if has_data %}
@@ -135,6 +121,42 @@
   <p class="fine-print">{{ t('academic.reupload_note') }}</p>
 </div>
 {% endif %}
+
+{# ------------------------------------------------ 手入力の逃げ道 #}
+<details class="card">
+  <summary class="card-title summary-toggle">{{ t('academic.manual_title') }}</summary>
+  <p class="fine-print">{{ t('academic.manual_note') }}</p>
+  <form method="post" action="{{ url_for('academic_manual') }}" class="stack-form">
+    <div class="field-row">
+      <div>
+        <label for="m-term">{{ t('academic.manual_term') }}</label>
+        <input id="m-term" type="text" name="term" placeholder="Fall 2025" required>
+      </div>
+      <div>
+        <label for="m-code">{{ t('academic.col_course') }}</label>
+        <input id="m-code" type="text" name="code" placeholder="ICS 45C" required>
+      </div>
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="m-title">{{ t('academic.col_title') }}（{{ t('common.optional') }}）</label>
+        <input id="m-title" type="text" name="title" placeholder="Programming in C++">
+      </div>
+      <div class="field-row">
+        <div>
+          <label for="m-units">{{ t('academic.col_units') }}</label>
+          <input id="m-units" type="text" name="units" placeholder="4" required>
+        </div>
+        <div>
+          <label for="m-grade">{{ t('academic.col_grade') }}（{{ t('common.optional') }}）</label>
+          <input id="m-grade" type="text" name="grade" placeholder="A-">
+        </div>
+      </div>
+    </div>
+    <p class="fine-print">{{ t('academic.grade_optional') }}</p>
+    <button class="btn" type="submit">{{ t('common.add') }}</button>
+  </form>
+</details>
 
 {# ------------------------------------------------ 学期ごとの履修
    既定では最新の 1 学期だけ。残りは「すべて表示」で開く(画面が長くなるため)。
@@ -215,40 +237,5 @@
 </div>
 {% endif %}
 
-{# ------------------------------------------------ 手入力の逃げ道 #}
-<details class="card">
-  <summary class="card-title summary-toggle">{{ t('academic.manual_title') }}</summary>
-  <p class="fine-print">{{ t('academic.manual_note') }}</p>
-  <form method="post" action="{{ url_for('academic_manual') }}" class="stack-form">
-    <div class="field-row">
-      <div>
-        <label for="m-term">{{ t('academic.manual_term') }}</label>
-        <input id="m-term" type="text" name="term" placeholder="Fall 2025" required>
-      </div>
-      <div>
-        <label for="m-code">{{ t('academic.col_course') }}</label>
-        <input id="m-code" type="text" name="code" placeholder="ICS 45C" required>
-      </div>
-    </div>
-    <div class="field-row">
-      <div>
-        <label for="m-title">{{ t('academic.col_title') }}（{{ t('common.optional') }}）</label>
-        <input id="m-title" type="text" name="title" placeholder="Programming in C++">
-      </div>
-      <div class="field-row">
-        <div>
-          <label for="m-units">{{ t('academic.col_units') }}</label>
-          <input id="m-units" type="text" name="units" placeholder="4" required>
-        </div>
-        <div>
-          <label for="m-grade">{{ t('academic.col_grade') }}（{{ t('common.optional') }}）</label>
-          <input id="m-grade" type="text" name="grade" placeholder="A-">
-        </div>
-      </div>
-    </div>
-    <p class="fine-print">{{ t('academic.grade_optional') }}</p>
-    <button class="btn" type="submit">{{ t('common.add') }}</button>
-  </form>
-</details>
 
 {% endblock %}

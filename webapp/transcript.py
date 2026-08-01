@@ -9,6 +9,11 @@
 の一覧に変換する。そこから GPA と「卒業単位(UCI は 180)までの進捗」を
 計算して academic.html に渡す。AntAlmanac が読むのと同じファイルを想定。
 
+■ 履修中の科目
+まだ成績が出ていない科目は grade を "N/A" にして持つ。GPA にも取得単位にも
+数えず、「履修中の単位」として別に集計する(compute_gpa 参照)。手入力で
+成績を空にしたときにこの状態になる。
+
 ■ 実際の UCI の HTML について(重要)
 Student Access の成績表は、**同じ履修を 3 つの表示形式で重複して持っている**:
 
@@ -83,9 +88,6 @@ TOTALS_RE = re.compile(
 # GPA にも取得単位にも数えず、「履修中」として別に集計する。
 IN_PROGRESS = "N/A"
 IN_PROGRESS_GRADES = {"N/A", "NA", "IP", "IN PROGRESS", ""}
-
-# 小数点つきの単位数("4.0")。整数だけの列(セクション番号など)と区別するのに使う。
-DECIMAL_UNITS_RE = re.compile(r"^\d{1,2}\.\d{1,2}$")
 
 # 大学が計算した公式の集計値。ラベル → 内部で使う名前。
 OFFICIAL_LABELS = {
@@ -361,117 +363,6 @@ def parse_transcript_html(html: str, school_name: str | None = None) -> dict:
     terms = sorted({c["term"] for c in courses}, key=term_sort_key)
     return {"courses": courses, "terms": terms,
             "official": _parse_official_totals(html), "error": None}
-
-
-def _find_course_code(cells: list[str], before: int) -> tuple[str, int, int] | None:
-    """cells[:before] から科目コードを探す。(コード, 開始位置, 終了位置) か None。
-
-    「学科 + 番号」が別セルの形と、1 セルに収まった形の両方に対応する。
-
-    **左から探す**のが要点。履修予定表には科目コードのあとに種別と節
-    ("Lec"/"A"、"Sem"/"1")が並ぶ列があり、右から探すと "SEM 1" を科目
-    コードと取り違える。科目コードの列は必ずそれらより左にある。
-    """
-    for i in range(0, before - 1):
-        dept, num = cells[i].strip(), cells[i + 1].strip()
-        if DEPT_RE.match(dept.upper()) and COURSE_NUM_RE.match(num.upper()):
-            return f"{dept.upper()} {num.upper()}", i, i + 1
-    for i in range(0, before):
-        if COURSE_CODE_RE.match(cells[i].strip().upper()):
-            return _clean(cells[i].upper()), i, i
-    return None
-
-
-def _parse_schedule_row(cells: list[str]) -> dict | None:
-    """履修予定表(Study List)の 1 行 → 履修 1 件。違えば None。
-
-    成績欄がまだ無いので、単位数を手がかりにする。セクション番号(5 桁)や
-    時限は単位数として拾わないよう、小数つきの値を優先する。
-    """
-    if len(cells) < 2 or TOTALS_RE.match(cells[0].strip()):
-        return None
-
-    # まず「小数つきの単位数」を探し、無ければ 1〜2 桁の整数を単位数とみなす
-    units = units_idx = None
-    for pattern in (DECIMAL_UNITS_RE, UNITS_RE):
-        for i, cell in enumerate(cells):
-            if not pattern.match(cell.strip()):
-                continue
-            value = float(cell)
-            if 0 < value <= 25 and _find_course_code(cells, i):
-                units, units_idx = value, i
-                break
-        if units is not None:
-            break
-    if units is None:
-        return None
-
-    found = _find_course_code(cells, units_idx)
-    if not found:
-        return None
-    code, code_start, code_end = found
-
-    # 単位数の直後に成績があるなら使う(成績表を読ませたときのため)
-    grade = IN_PROGRESS
-    if units_idx + 1 < len(cells) and GRADE_RE.match(cells[units_idx + 1].strip().upper()):
-        grade = cells[units_idx + 1].strip().upper()
-
-    candidates = [cells[i] for i in range(0, code_start)] + \
-                 [cells[i] for i in range(code_end + 1, units_idx)]
-    candidates = [c.strip() for c in candidates
-                  if c.strip() and not UNITS_RE.match(c.strip())
-                  and not DECIMAL_UNITS_RE.match(c.strip())]
-    title = max(candidates, key=len) if candidates else ""
-
-    return {"code": code, "title": title, "units": units, "grade": grade}
-
-
-def parse_schedule_html(html: str, school_name: str | None = None) -> dict:
-    """履修予定表(Study List)の HTML → まだ成績が出ていない履修一覧。
-
-    返す形は parse_transcript_html と同じだが、grade は "N/A"(履修中)になる。
-    学期が書かれていなければ、今のクォーターのものとして扱う。
-    """
-    import weeks  # 循環 import を避けるためここで読む
-
-    parser = _Blocks()
-    parser.feed(html)
-    parser.close()
-
-    courses: list[dict] = []
-    seen: set[tuple] = set()
-    current_term = None
-
-    for block in parser.blocks:
-        if block["type"] == "text":
-            term = _normalize_term(block["text"])
-            if term:
-                current_term = term
-            continue
-
-        cells = block["cells"]
-        row = _parse_schedule_row(cells)
-        if row is None:
-            term = _normalize_term(" ".join(c for c in cells if c.strip()))
-            if term:
-                current_term = term
-            continue
-
-        row["term"] = current_term or weeks.term_of()
-        key = (row["term"], row["code"])
-        if key in seen:          # 同じ科目が複数の表に出ていても 1 件にする
-            continue
-        seen.add(key)
-        courses.append(row)
-
-    if not courses:
-        return {"courses": [], "terms": [], "error":
-                "この HTML から履修科目を読み取れませんでした。"
-                "Student Access の「Study List」ページを保存した .html か"
-                "確認してください。下の手入力でも登録できます。"}
-
-    terms = sorted({c["term"] for c in courses}, key=term_sort_key)
-    return {"courses": courses, "terms": terms, "error": None}
 
 
 def compute_gpa(courses: list[dict], school_name: str | None = None,
