@@ -62,6 +62,23 @@
       white-space: pre-wrap;
     }
     .shot-result.is-error { background: #fdf3f3; border-color: #e8cccc; color: #a52121; }
+  /* 同期する科目を選ぶところ。Canvas は「オリエンテーション」も「去年の
+     授業」も同じ形で返してくるので、どれを取り込むかは本人に選んでもらう。 */
+  .pickhead { display: flex; justify-content: space-between; align-items: baseline;
+    margin-top: 12px; font-size: 11px; }
+  .pickhead a { color: #185fa5; text-decoration: none; }
+  .pickhead a:hover { text-decoration: underline; }
+  .picklist { margin-top: 6px; max-height: 190px; overflow-y: auto;
+    border: 1px solid #e5e2da; border-radius: 6px; background: #fff; }
+  .pickempty { font-size: 11px; color: #6b6960; padding: 10px; }
+  .pick { display: flex; align-items: flex-start; gap: 7px; padding: 6px 8px;
+    border-bottom: 1px solid #f0eee8; cursor: pointer; }
+  .pick:last-child { border-bottom: none; }
+  .pick:hover { background: #f7f6f2; }
+  .pick input { margin: 1px 0 0; flex: none; width: auto; }
+  .pick .nm { font-size: 11px; word-break: break-word; line-height: 1.35; }
+  .pick .tm { font-size: 10px; color: #9b988c; }
+  .pick.is-on .nm { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -82,17 +99,24 @@
     requests are made at all.
   </div>
 
-  <label style="font-size:12px; display:block; margin-top:10px;">Term</label>
-  <select id="selectedTerm">
-    <option value="">Loading...</option>
-  </select>
+  <div class="pickhead">
+    <label style="font-size:12px;">Courses to sync</label>
+    <span>
+      <a href="#" id="pickAll">All</a> ·
+      <a href="#" id="pickNone">None</a> ·
+      <a href="#" id="pickReload">Reload</a>
+    </span>
+  </div>
+  <div id="courseList" class="picklist">
+    <div class="pickempty">Loading your Canvas courses…</div>
+  </div>
   <div class="notice" style="margin-top:6px;">
-    Only courses in the selected term are synced, so past terms and training
-    courses are left out.
+    Only the courses you tick are synced. Canvas lists orientation spaces and old
+    quarters the same way as real classes, so you pick them yourself.
   </div>
 
   <button id="syncNow" class="secondary">Sync now</button>
-  <button id="recrawl" class="secondary">Re-fetch course list (new term)</button>
+  <button id="recrawl" class="secondary">Re-fetch everything</button>
 
   <div id="progressWrap" style="display:none;">
     <div class="phead">

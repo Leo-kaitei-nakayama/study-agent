@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Study Agent Canvas Sync",
-  "version": "0.3.0",
-  "description": "Syncs your Canvas courses, syllabi, rubrics and weekly modules, drafts answers for practice questions, and can explain a screenshot of a page. Opt-in; never submits anything.",
+  "version": "0.4.0",
+  "description": "Syncs the Canvas courses you pick \u2014 syllabi, rubrics, weekly modules and assignments \u2014 drafts answers for practice questions, and can explain a screenshot of a page. Opt-in; never submits anything.",
   "permissions": [
     "storage",
     "alarms",

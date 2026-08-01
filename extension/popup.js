@@ -2,7 +2,7 @@
 // Everything defaults to off — nothing happens until the user opts in.
 
 const DEFAULTS = { syncSyllabus: false, autoFillAnswers: false, token: "",
-                   selectedTerm: "" };
+                   selectedCourseIds: [] };
 
 function setStatus(text) {
   document.getElementById("status").textContent = text;
@@ -13,7 +13,7 @@ function loadState() {
     document.getElementById("syncSyllabus").checked = state.syncSyllabus;
     document.getElementById("autoFillAnswers").checked = state.autoFillAnswers;
     document.getElementById("token").value = state.token || "";
-    if (state.token) { loadCourses(); loadTerms(state.selectedTerm); }
+    if (state.token) { loadCourses(); loadPicker(state.selectedCourseIds); }
   });
   chrome.storage.local.get({ lastStatus: "", syncProgress: null }, (s) => {
     setStatus(s.lastStatus || "Not synced yet");
@@ -111,45 +111,100 @@ function renderPendingLinks(links) {
   }
 }
 
-// -------------------------------------------------------------------- terms
-// Pull the term list from Canvas. If today falls inside a term, mark it current.
-function loadTerms(currentValue) {
-  const sel = document.getElementById("selectedTerm");
-  chrome.runtime.sendMessage({ action: "getTerms" }, (res) => {
-    sel.textContent = "";
-    const all = document.createElement("option");
-    all.value = "";
-    all.textContent = "All terms";
-    sel.appendChild(all);
+// ------------------------------------------------------------------ picker
+// どの科目を同期するかは **本人が選ぶ**。
+//
+// 以前は Canvas の「学期」で自動的に絞ろうとしていたが、うまくいかなかった。
+// Canvas はオリエンテーション用のスペースや、年をまたぐ研修コースを、普通の
+// 授業とまったく同じ形で返してくる。学期名が付いていないものも多く、名前を
+// 見ても何年のものか分からない。だからここで一覧に出して選んでもらう。
+let canvasCourses = [];
 
+function loadPicker(selectedIds) {
+  const list = document.getElementById("courseList");
+  list.textContent = "";
+  list.appendChild(makeEmpty("Loading your Canvas courses…"));
+
+  chrome.runtime.sendMessage({ action: "listCanvasCourses" }, (res) => {
     if (chrome.runtime.lastError || !res || !res.ok) {
-      sel.value = currentValue || "";
+      list.textContent = "";
+      list.appendChild(makeEmpty(
+        (res && res.error) || "Could not read your Canvas courses. Open Canvas and sign in."));
       return;
     }
-    const terms = (res.terms || []).sort((a, b) => b.name.localeCompare(a.name));
-    for (const t of terms) {
-      const opt = document.createElement("option");
-      opt.value = t.name;
-      opt.textContent = `${t.name} (${t.count})` + (t.isCurrent ? " · current" : "");
-      sel.appendChild(opt);
-    }
-    if (currentValue) {
-      sel.value = currentValue;
-      return;
-    }
-    // No term chosen yet: pick the current one AND save it right away.
-    //
-    // This used to only preselect it in the dropdown, leaving storage at ""
-    // (= All terms). The popup then showed "Spring 2026" while the sync
-    // actually crawled every term the student is still enrolled in, dragging
-    // in old courses like "Math 2B Winter 2025". What you see must be what
-    // runs, so persist it here.
-    const cur = terms.find((t) => t.isCurrent);
-    if (!cur) return;
-    sel.value = cur.name;
-    chrome.storage.sync.set({ selectedTerm: cur.name });
+    canvasCourses = res.courses || [];
+    renderPicker(new Set((selectedIds || []).map(String)));
   });
 }
+
+function makeEmpty(text) {
+  const d = document.createElement("div");
+  d.className = "pickempty";
+  d.textContent = text;
+  return d;
+}
+
+function renderPicker(checkedIds) {
+  const list = document.getElementById("courseList");
+  list.textContent = "";
+  if (canvasCourses.length === 0) {
+    list.appendChild(makeEmpty("No active courses found in Canvas."));
+    return;
+  }
+  for (const c of canvasCourses) {
+    const row = document.createElement("label");
+    row.className = "pick";
+
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = String(c.id);
+    box.checked = checkedIds.has(String(c.id));
+    box.addEventListener("change", () => {
+      row.classList.toggle("is-on", box.checked);
+    });
+
+    const right = document.createElement("div");
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = c.name;
+    right.appendChild(nm);
+    // 学期は「絞る条件」ではなく、見分けるための手がかりとして出す
+    const tm = document.createElement("div");
+    tm.className = "tm";
+    tm.textContent = c.term || "(no term)";
+    right.appendChild(tm);
+
+    row.classList.toggle("is-on", box.checked);
+    row.appendChild(box);
+    row.appendChild(right);
+    list.appendChild(row);
+  }
+}
+
+function pickedIds() {
+  return Array.from(
+    document.querySelectorAll("#courseList input[type=checkbox]:checked"))
+    .map((b) => Number(b.value))
+    .filter((n) => !Number.isNaN(n));
+}
+
+function setAllPicked(on) {
+  for (const b of document.querySelectorAll("#courseList input[type=checkbox]")) {
+    b.checked = on;
+    b.closest(".pick").classList.toggle("is-on", on);
+  }
+}
+
+document.getElementById("pickAll").addEventListener("click", (e) => {
+  e.preventDefault(); setAllPicked(true);
+});
+document.getElementById("pickNone").addEventListener("click", (e) => {
+  e.preventDefault(); setAllPicked(false);
+});
+document.getElementById("pickReload").addEventListener("click", (e) => {
+  e.preventDefault();
+  loadPicker(pickedIds());     // いま選んでいるものは保ったまま取り直す
+});
 
 // ------------------------------------------------------------------ actions
 function saveState() {
@@ -157,7 +212,7 @@ function saveState() {
     syncSyllabus: document.getElementById("syncSyllabus").checked,
     autoFillAnswers: document.getElementById("autoFillAnswers").checked,
     token: document.getElementById("token").value.trim(),
-    selectedTerm: document.getElementById("selectedTerm").value,
+    selectedCourseIds: pickedIds(),
   };
   chrome.storage.sync.set(state, () => {
     setStatus("Saved");
@@ -165,18 +220,22 @@ function saveState() {
   });
 }
 
-// Run a sync using the term that is *visible* in the dropdown, even if the
-// user never pressed Save. If that differs from what is stored, saving it is
-// enough: background.js watches storage, forgets the cached course list and
-// re-crawls on its own — so we must not also send the message, or two syncs
-// would run over each other.
+// Sync exactly what is ticked on screen, even if Save was never pressed.
+// If the ticks differ from what is stored, saving them is enough: background.js
+// watches storage, drops the cached course list and re-crawls on its own — so we
+// must not also send the message, or two syncs would run over each other.
 function runAction(action, busyText) {
-  const sel = document.getElementById("selectedTerm");
-  const term = sel ? sel.value : "";
-  chrome.storage.sync.get({ selectedTerm: "" }, (s) => {
-    if (s.selectedTerm !== term) {
-      setStatus("Term changed — re-fetching the course list…");
-      chrome.storage.sync.set({ selectedTerm: term });
+  const picked = pickedIds();
+  chrome.storage.sync.get({ selectedCourseIds: [] }, (s) => {
+    const before = (s.selectedCourseIds || []).map(Number).sort().join(",");
+    const now = picked.slice().sort().join(",");
+    if (before !== now) {
+      setStatus("Course selection changed — re-fetching…");
+      chrome.storage.sync.set({ selectedCourseIds: picked });
+      return;
+    }
+    if (picked.length === 0) {
+      setStatus("Tick at least one course first.");
       return;
     }
     sendAction(action, busyText);
