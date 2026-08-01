@@ -245,10 +245,8 @@ function runAction(action, busyText) {
 function sendAction(action, busyText) {
   setStatus(busyText);
   document.getElementById("syncNow").disabled = true;
-  document.getElementById("recrawl").disabled = true;
   chrome.runtime.sendMessage({ action }, (res) => {
     document.getElementById("syncNow").disabled = false;
-    document.getElementById("recrawl").disabled = false;
     if (chrome.runtime.lastError) {
       setStatus("Error: " + chrome.runtime.lastError.message);
     } else if (res && res.ok) {
@@ -262,10 +260,10 @@ function sendAction(action, busyText) {
 
 document.addEventListener("DOMContentLoaded", loadState);
 document.getElementById("save").addEventListener("click", saveState);
+// 同期の入口はこの1つだけ。フルクロールが要るかどうかは needsFullCrawl()
+// が自分で判断するので、「取り直す」ボタンを分ける必要がない。
 document.getElementById("syncNow").addEventListener("click",
   () => runAction("syncNow", "Syncing..."));
-document.getElementById("recrawl").addEventListener("click",
-  () => runAction("forceRecrawl", "Re-fetching course list..."));
 
 // ---------------------------------------------- スクリーンショットで質問する
 // 「Other」を選んだときだけ自由入力欄を出す。

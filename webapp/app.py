@@ -292,7 +292,29 @@ def assignments_page():
     tabs, selected = _term_tabs(user_id)
     this_week = weeks.week_of()
 
-    all_items = db.list_assignments(user_id, term=selected)
+    term_items = db.list_assignments(user_id, term=selected)
+
+    # 科目のタブ。オリエンテーション科目だけで 100 件を超えることがあるので、
+    # 全部を1つの流れで出すと目当ての授業が埋もれる。既定は「すべて」。
+    course_tabs = []
+    seen: set = set()
+    for a in term_items:
+        cid = a["course_id"]
+        if cid is None or cid in seen:
+            continue
+        seen.add(cid)
+        course_tabs.append({
+            "id": cid,
+            "name": a["course_name"] or t("notes.uncategorized"),
+            "count": sum(1 for x in term_items if x["course_id"] == cid),
+        })
+    course_tabs.sort(key=lambda c: c["name"].lower())
+
+    raw = request.args.get("course", "")
+    selected_course = int(raw) if raw.isdigit() and int(raw) in seen else None
+    all_items = ([a for a in term_items if a["course_id"] == selected_course]
+                 if selected_course else term_items)
+
     current = [a for a in all_items if a["week_no"] == this_week]
 
     # 今週以外は週ごとにまとめる(新しい週が上)
@@ -308,6 +330,7 @@ def assignments_page():
     return render_template(
         "assignments.html",
         terms=tabs, selected_term=selected,
+        course_tabs=course_tabs, selected_course=selected_course,
         this_week=this_week, week_assignments=current,
         other_weeks=other_weeks, total=len(all_items))
 

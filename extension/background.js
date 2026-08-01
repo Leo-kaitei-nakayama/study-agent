@@ -624,11 +624,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await runSync("manual"));
         return;
       }
-      if (msg.action === "forceRecrawl") {
-        await forgetCourseMap();
-        sendResponse(await runSync("re-fetch"));
-        return;
-      }
 
       const { token } = await chrome.storage.sync.get({ token: "" });
       if (!token) throw new Error("No token set.");

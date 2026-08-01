@@ -26,8 +26,27 @@
 <div class="term-tabs">
   {% for term in terms %}
   <a class="term-tab {% if term == selected_term %}is-active{% endif %}"
-     href="{{ url_for('assignments_page', term=term) }}"
+     href="{{ url_for('assignments_page', term=term, course=selected_course) }}"
      {% if term == selected_term %}aria-current="true"{% endif %}>{{ term }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ------------------------------------------------ 科目でしぼる
+   オリエンテーション科目だけで 100 件を超えることがあるので、
+   授業ごとに切り替えられるようにする。既定は「すべて」。 #}
+{% if course_tabs|length > 1 %}
+<div class="term-tabs course-tabs">
+  <a class="term-tab {% if not selected_course %}is-active{% endif %}"
+     href="{{ url_for('assignments_page', term=selected_term) }}">
+    {{ t('assignments.all_courses') }}
+  </a>
+  {% for c in course_tabs %}
+  <a class="term-tab {% if c.id == selected_course %}is-active{% endif %}"
+     href="{{ url_for('assignments_page', term=selected_term, course=c.id) }}"
+     {% if c.id == selected_course %}aria-current="true"{% endif %}>
+    {{ c.name }} <span class="tab-count">{{ c.count }}</span>
+  </a>
   {% endfor %}
 </div>
 {% endif %}

@@ -313,6 +313,15 @@ a.cell-sub:hover { text-decoration: underline; }
 
 /* ------------------------------------------------ クォーターのタブ
    ノート一覧を学期で切り替える。現在のタブだけ下線と濃い文字にする。 */
+/* 科目でしぼるタブ。学期タブのすぐ下に並ぶので、少し詰めて出す。 */
+.course-tabs { margin-top: -6px; }
+.course-tabs .term-tab { font-size: 12px; }
+.tab-count {
+  display: inline-block; margin-left: 4px; padding: 0 5px;
+  border-radius: 8px; background: var(--bg); color: var(--text-muted);
+  font-size: 11px; font-weight: 500;
+}
+.term-tab.is-active .tab-count { background: rgba(255,255,255,.25); color: inherit; }
 .term-tabs {
   display: flex; gap: 4px; flex-wrap: wrap;
   border-bottom: 1px solid var(--border); margin-bottom: 20px;
