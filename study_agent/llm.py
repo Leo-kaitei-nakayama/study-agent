@@ -95,6 +95,72 @@ def call_provider(name: str, system: str, user: str, max_tokens: int,
     return text, tin, tout
 
 
+def call_provider_vision(name: str, system: str, user: str, image_b64: str,
+                         media_type: str, max_tokens: int,
+                         api_key: str) -> tuple[str, int, int]:
+    """画像つきで1回のAPI呼び出しを実行し (text, tokens_in, tokens_out) を返す。
+
+    拡張機能のスクリーンショット(問題文が画像のとき)に使う。
+    DeepSeek は画像に対応していないので、呼び出し側で claude / openai に
+    振り分けること(VISION_PROVIDERS 参照)。
+    """
+    cfg = PROVIDERS[name]
+    if name == "claude":
+        from anthropic import Anthropic
+        resp = Anthropic(api_key=api_key).messages.create(
+            model=cfg["model"], max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64",
+                                             "media_type": media_type,
+                                             "data": image_b64}},
+                {"type": "text", "text": user},
+            ]}])
+        text = "".join(b.text for b in resp.content if b.type == "text")
+        return text, resp.usage.input_tokens, resp.usage.output_tokens
+
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, base_url=cfg.get("base_url"))
+    resp = client.chat.completions.create(
+        model=cfg["model"], max_tokens=max_tokens,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": [
+                      {"type": "image_url", "image_url": {
+                          "url": f"data:{media_type};base64,{image_b64}"}},
+                      {"type": "text", "text": user},
+                  ]}])
+    text = resp.choices[0].message.content or ""
+    tin = resp.usage.prompt_tokens if resp.usage else 0
+    tout = resp.usage.completion_tokens if resp.usage else 0
+    return text, tin, tout
+
+
+#: 画像を読めるプロバイダ。前にあるものから順に、鍵がある方を使う。
+VISION_PROVIDERS = ("claude", "openai")
+
+
+def complete_vision(system: str, user: str, image_b64: str,
+                    media_type: str = "image/png", max_tokens: int = 2000,
+                    api_keys: dict | None = None, usage_callback=None) -> str:
+    """画像つきの補完。鍵のある画像対応プロバイダを順に試す。
+
+    複数ユーザー向けWebアプリからの利用を想定しているので、api_keys と
+    usage_callback を必ず渡す(利用ぶんはクレジットから引かれる)。
+    """
+    keys = api_keys or {}
+    for name in VISION_PROVIDERS:
+        key = keys.get(name) or (os.getenv(PROVIDERS[name]["env_key"]) or "")
+        if not key:
+            continue
+        text, tin, tout = call_provider_vision(
+            name, system, user, image_b64, media_type, max_tokens, key)
+        if usage_callback:
+            usage_callback(name, tin, tout)
+        return text
+    raise RuntimeError(
+        "画像を読めるプロバイダのAPIキーがありません "
+        f"({' / '.join(PROVIDERS[n]['env_key'] for n in VISION_PROVIDERS)})。")
+
+
 def complete(system: str, user: str, max_tokens: int = 4096,
              provider: str = "auto", quiet: bool = False,
              api_keys: dict | None = None, usage_callback=None,

@@ -192,3 +192,25 @@ AI が作るノート / 課題ドラフト / クイズ回答の**言語も画面
 3. `/notes/delete/apply` … ここで初めて DB の行と生成物のファイルを消す
 
 ブラウザの `confirm()` に頼らないので、JS が無効でも確認が挟まる。
+
+## 拡張機能からのスクリーンショット質問 (Stage C)
+
+`POST /api/extension/screenshot` に画像(データURL)と mode を送ると、
+画像を読めるプロバイダ(Claude → OpenAI の順)で答えを返す。
+
+| mode | 指示 |
+|---|---|
+| `explanation` | 何を問われていて、どう考えるかを説明する |
+| `answer` | 解答の下書きを作る(**提出はしない**) |
+| `other` | `prompt` に書かれた指示に従う |
+
+**Canvas は 403 で断る**(`BLOCKED_SCREENSHOT_HOSTS`)。Canvas は学生自身が
+操作すると決めてあるため。拡張機能側でも同じ判定をしていて、二重の歯止めに
+なっている。結果はノートとしても保存する。
+
+## 下書き完了の通知
+
+`GET /api/extension/notifications` で「下書きができたのにまだ知らせていない課題」
+を返し、`POST /api/extension/notifications/ack` で知らせ済みの印を付ける
+(`assignments.notified_at`)。拡張機能が30分ごとに見に来る。
+通知が言うのは「下書きができた」ことだけで、提出は行わない。

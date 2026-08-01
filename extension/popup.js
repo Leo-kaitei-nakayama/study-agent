@@ -180,3 +180,53 @@ document.getElementById("syncNow").addEventListener("click",
   () => runAction("syncNow", "Syncing..."));
 document.getElementById("recrawl").addEventListener("click",
   () => runAction("forceRecrawl", "Re-fetching course list..."));
+
+// ---------------------------------------------- スクリーンショットで質問する
+// 「Other」を選んだときだけ自由入力欄を出す。
+function selectedShotMode() {
+  const el = document.querySelector("input[name=shotMode]:checked");
+  return el ? el.value : "explanation";
+}
+
+document.getElementById("shotModes").addEventListener("change", () => {
+  document.getElementById("shotPrompt").style.display =
+    selectedShotMode() === "other" ? "block" : "none";
+});
+
+document.getElementById("shotGo").addEventListener("click", () => {
+  const btn = document.getElementById("shotGo");
+  const out = document.getElementById("shotResult");
+  const mode = selectedShotMode();
+  const prompt = document.getElementById("shotPrompt").value.trim();
+
+  if (mode === "other" && !prompt) {
+    out.style.display = "block";
+    out.className = "shot-result is-error";
+    out.textContent = "Type what you want the agent to do with the screenshot.";
+    return;
+  }
+
+  btn.disabled = true;
+  out.style.display = "block";
+  out.className = "shot-result";
+  out.textContent = "Taking a screenshot…";
+
+  chrome.runtime.sendMessage(
+    { action: "screenshot", mode, prompt,
+      courseName: document.getElementById("courseName")?.value || "" },
+    (res) => {
+      btn.disabled = false;
+      if (chrome.runtime.lastError) {
+        out.className = "shot-result is-error";
+        out.textContent = chrome.runtime.lastError.message;
+        return;
+      }
+      if (!res || !res.ok) {
+        out.className = "shot-result is-error";
+        out.textContent = (res && res.error) || "Something went wrong.";
+        return;
+      }
+      out.className = "shot-result";
+      out.textContent = res.data.answer || "(empty reply)";
+    });
+});
