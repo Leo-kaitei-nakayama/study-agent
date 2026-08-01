@@ -230,6 +230,31 @@ def init_db():
         """)
     # 後から足した列(term など)を既存行にも埋める
     backfill_note_terms()
+    remove_placeholder_courses()
+
+
+def remove_placeholder_courses():
+    """「Dashboard」のような、授業ではない科目の行を片付ける。
+
+    拡張機能がページのタイトルから科目名を推測していた頃に作られたもの。
+    今は取り込む前に弾いている(coursemap.is_real_course)が、すでに
+    できてしまった行が一覧にタイルとして残るので、起動時に一度掃除する。
+
+    **中身があるものは消さない。** ノートも課題も 0 件のものだけが対象。
+    万一その名前で本当に使っている科目があっても、中身は失われない。
+    """
+    import coursemap
+
+    names = sorted(coursemap.NON_COURSE_NAMES)
+    with _conn() as c:
+        c.execute("""
+            DELETE FROM courses
+            WHERE lower(btrim(name)) = ANY(%s)
+              AND id NOT IN (SELECT course_id FROM notes
+                             WHERE course_id IS NOT NULL)
+              AND id NOT IN (SELECT course_id FROM assignments
+                             WHERE course_id IS NOT NULL)
+        """, (names,))
 
 
 # ---------------------------------------------------------------- users

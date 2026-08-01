@@ -303,15 +303,13 @@ def assignments_page():
     other_weeks = [{"week": w, "items": items}
                    for w, items in sorted(others.items(), reverse=True)]
 
-    # ?select=1 で「どれを下書きさせるか選ぶ」状態になる。
-    # 下書きボタンを押すとこの状態に入り、チェックした課題だけが対象になる。
+    # 下書きは各行のボタンから 1 件ずつ。まとめて走らせる入口は置いていない
+    # (オリエンテーション科目などで課題が 100 件を超えるため)。
     return render_template(
         "assignments.html",
         terms=tabs, selected_term=selected,
         this_week=this_week, week_assignments=current,
-        other_weeks=other_weeks, total=len(all_items),
-        select_mode=request.args.get("select") == "1",
-        draftable_count=sum(1 for a in all_items if _is_draftable(a)))
+        other_weeks=other_weeks, total=len(all_items))
 
 
 def _is_draftable(a) -> bool:
@@ -458,11 +456,12 @@ MAX_DRAFTS_PER_RUN = 5
 @app.route("/notes/run-week", methods=["POST"])
 @login_required
 def notes_run_week():
-    """チェックされた課題の下書きを作る。
+    """選ばれた課題の下書きを作る。
 
-    課題ページで下書きボタンを押すと選択モードになり、チェックした課題の
-    id がここに送られてくる。id が 1 つも来なかった場合は何もしない
-    (「全部やる」を暗黙に走らせない — 意図しない課金を避けるため)。
+    課題ページの各行にある小さなボタンから、その 1 件の id が送られてくる。
+    id が 1 つも来なかった場合は何もしない(「全部やる」を暗黙に走らせない
+    — 意図しない課金を避けるため)。複数来ても受け付けるが、1 回で作るのは
+    MAX_DRAFTS_PER_RUN 件まで。
 
     PDF の指定どおり:
       - quiz / short は、その週のノートを根拠に下書きする
@@ -479,7 +478,7 @@ def notes_run_week():
     pending = [a for a in db.get_assignments_by_ids(user_id, ids) if _is_draftable(a)]
     if not pending:
         flash(t("flash.week_nothing"))
-        return redirect(url_for("assignments_page", term=term, select=1))
+        return redirect(url_for("assignments_page", term=term))
 
     routing = _user_routing(user_id)
     done, failed = 0, 0
@@ -621,6 +620,19 @@ def _extension_user_id():
     return db.get_user_by_extension_token_hash(token_hash)
 
 
+def _extension_course_id(user_id: int, course_name: str | None):
+    """拡張機能が言ってきた科目名から course_id を引く。
+
+    Canvas の画面名(Dashboard / Inbox など)は授業ではないので取り込まず、
+    None を返す(= その分は「未分類」に入る)。content.js はページのタイトル
+    から科目名を推測するので、ダッシュボードを開いているとこれらが紛れ込む。
+    """
+    name = (course_name or "").strip()
+    if not coursemap.is_real_course(name):
+        return None
+    return db.add_course(user_id, name)
+
+
 @app.route("/api/extension/syllabus", methods=["POST"])
 def api_extension_syllabus():
     user_id = _extension_user_id()
@@ -633,7 +645,7 @@ def api_extension_syllabus():
     if not course_name or not text:
         return {"error": "course_name and text are required"}, 400
 
-    course_id = db.add_course(user_id, course_name)
+    course_id = _extension_course_id(user_id, course_name)
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     filename = f"{user_id}_{stamp}_syllabus_{course_name}.md".replace(" ", "_")
     (OUTPUT_DIR / filename).write_text(text, encoding="utf-8")
@@ -691,7 +703,8 @@ def api_extension_sync():
         if not isinstance(entry, dict):
             continue
         name = (entry.get("name") or "").strip()
-        if not name:
+        # Canvas の画面名(Dashboard など)は授業ではないので取り込まない
+        if not coursemap.is_real_course(name):
             continue
         course_id = db.add_course(user_id, name)
 
@@ -853,7 +866,7 @@ def api_extension_links():
         return {"error": "links must be a list"}, 400
 
     course_name = (payload.get("course_name") or "").strip()
-    course_id = db.add_course(user_id, course_name) if course_name else None
+    course_id = _extension_course_id(user_id, course_name)
 
     saved = 0
     for link in links:
@@ -889,7 +902,7 @@ def api_extension_capture():
     if kind not in ("resource", "requirements"):
         kind = "resource"
 
-    course_id = db.add_course(user_id, course_name) if course_name else None
+    course_id = _extension_course_id(user_id, course_name)
 
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     safe = re.sub(r"[^A-Za-z0-9_\-]+", "_", title)[:40] or "page"
@@ -933,8 +946,8 @@ def api_extension_answer():
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}, 500
 
-    if course_name:
-        course_id = db.add_course(user_id, course_name)
+    course_id = _extension_course_id(user_id, course_name)
+    if course_id:
         db.add_note(user_id, course_id, "practice_answer",
                    f"_inline_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.md",
                    question_text[:60],
@@ -1026,7 +1039,7 @@ def api_extension_screenshot():
         return {"error": str(e)}, 500
 
     # あとで見返せるようにノートとしても残す
-    course_id = db.add_course(user_id, course_name) if course_name else None
+    course_id = _extension_course_id(user_id, course_name)
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     filename = f"{user_id}_{stamp}_screenshot_{mode}.md"
     (OUTPUT_DIR / filename).write_text(

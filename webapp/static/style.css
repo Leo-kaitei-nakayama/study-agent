@@ -349,6 +349,10 @@ a.cell-sub:hover { text-decoration: underline; }
 .assignment-status.is-done { color: #2c6b3f; font-weight: 500; }
 .assignment-status.is-done a { color: inherit; }
 .assignment-status.is-manual { color: #8a5a1a; }
+/* 1 行につき 1 つの下書きボタン。行の中に小さなフォームとして入る。
+   幅は「下書き済み」の文字と同じくらいに保ち、行の右端がそろうようにする。 */
+.assignment-do { flex: 0 0 auto; margin: 0; }
+.assignment-do .btn { white-space: nowrap; }
 .week-actions {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px;
 }

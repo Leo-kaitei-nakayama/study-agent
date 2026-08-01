@@ -6,9 +6,10 @@
     2. 今週の課題
     3. それ以外の週(新しい週が上)
 
-  「エージェントに下書きを作らせる」を押すと ?select=1 の選択モードに入り、
-  各行にチェックボックスが出る。**チェックした課題だけ**が下書きされる。
-  エッセイと下書き済みはチェックできない(対象外なので)。
+  下書きは **1 件ずつ**。各行の右端にある小さなボタンを押すと、その課題だけが
+  下書きされる(_assignment_row.html)。「全部まとめて作る」ボタンは置かない —
+  オリエンテーション科目などで課題が 100 件を超えることがあり、一度に走ると
+  意図しない課金になるため。
 
   下書きボタンは **提出しない**。作るのは下書きまでで、出すかどうかは本人が決める。
 #}
@@ -25,27 +26,11 @@
 <div class="term-tabs">
   {% for term in terms %}
   <a class="term-tab {% if term == selected_term %}is-active{% endif %}"
-     href="{{ url_for('assignments_page', term=term, select=1 if select_mode else None) }}"
+     href="{{ url_for('assignments_page', term=term) }}"
      {% if term == selected_term %}aria-current="true"{% endif %}>{{ term }}</a>
   {% endfor %}
 </div>
 {% endif %}
-
-{% if select_mode %}
-<div class="select-banner">
-  <span>{{ t('assignments.select_prompt') }}</span>
-  <label class="check-inline">
-    <input type="checkbox" form="draft-form" onclick="
-      document.getElementById('draft-form')
-        .querySelectorAll('input[name=assignment_id]:not([disabled])')
-        .forEach(cb => cb.checked = this.checked);">
-    {{ t('notes.select_all') }}
-  </label>
-</div>
-{% endif %}
-
-<form id="draft-form" method="post" action="{{ url_for('notes_run_week') }}">
-<input type="hidden" name="term" value="{{ selected_term }}">
 
 {# ------------------------------------------------ 今週 #}
 <div class="card">
@@ -82,26 +67,12 @@
 </div>
 {% endif %}
 
-{# ------------------------------------------------ 下書きの操作 #}
+{# 提出しないことの断り書き。ボタンは各行にあるので、ここは説明だけ。 #}
 {% if total %}
-<div class="week-actions">
-  {% if select_mode %}
-  <button class="btn btn-primary" type="submit">{{ t('assignments.draft_selected') }}</button>
-  <a class="btn" href="{{ url_for('assignments_page', term=selected_term) }}">{{ t('delete.cancel') }}</a>
-  <span class="fine-print">{{ t('notes.run_week_note') }}</span>
-  {% else %}
-  <a class="btn btn-primary"
-     href="{{ url_for('assignments_page', term=selected_term, select=1) }}">
-    {{ t('notes.run_week') }}
-  </a>
-  <span class="fine-print">
-    {{ t('assignments.draftable_count', count=draftable_count) }} ·
-    {{ t('notes.run_week_note') }}
-  </span>
-  {% endif %}
+<div class="page-actions">
+  <span class="fine-print">{{ t('assignments.per_row_note') }}</span>
 </div>
 {% endif %}
-</form>
 
 {% if not total %}
 <p class="empty-centered">{{ t('assignments.empty') }}</p>
