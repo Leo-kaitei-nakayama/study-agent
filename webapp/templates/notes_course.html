@@ -31,6 +31,59 @@
 </div>
 {% endif %}
 
+{# --------------------------------------------- 科目の文脈(道具と担当)
+   シラバスから機械的に読み取ったもの(webapp/coursemap.py)。AI は使わない。
+   「未分類」には科目が無いので、この塊ごと出ない。 #}
+{% if tools or allocation %}
+<div class="card context-card">
+  <h2 class="card-title">{{ t('context.title') }}</h2>
+  <p class="fine-print">{{ t('context.subtitle') }}</p>
+
+  <h3 class="context-heading">{{ t('context.tools') }}</h3>
+  {% if tools %}
+    <div class="tool-chips">
+      {% for tool in tools %}
+      {% set cat_key = 'context.cat_' ~ tool.category %}
+      {% set cat_label = t(cat_key) %}
+      <span class="tool-chip" title="{{ tool.category if cat_label == cat_key else cat_label }}">
+        {{ tool.name }}
+      </span>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="empty-state">{{ t('context.no_tools') }}</p>
+  {% endif %}
+
+  {% if allocation %}
+  <h3 class="context-heading">{{ t('context.duty') }}</h3>
+  <div class="duty-list">
+    {% for row in allocation %}
+    {# 課題の種類の呼び名は課題ページ(_assignment_row.html)と同じ akind_* を使う。
+       ノートの kind_* とは別物なので、混ぜると "Quiz answer" のような
+       ちぐはぐな表示になる。 #}
+    {% set kind_key = 'notes.akind_' ~ row.kind %}
+    {% set kind_label = t(kind_key) %}
+    <div class="duty-row">
+      <span class="duty-kind">
+        <span class="assignment-kind kind-{{ row.kind }}">
+          {{ row.kind if kind_label == kind_key else kind_label }}
+        </span>
+        <span class="cell-muted">×{{ row.count }}</span>
+      </span>
+      <span class="duty-agent">
+        {% if row.agent %}
+          {% for part in row.agent %}<code>{{ part }}</code>{% endfor %}
+        {% else %}
+          <span class="cell-muted">{{ t('context.agent_none') }}</span>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="card">
   {% if notes %}
     {% for n in notes %}

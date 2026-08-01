@@ -14,6 +14,7 @@
 | `school.py` | 学校ごとの定数(UCI: クォーター制 / 卒業180単位 / AntAlmanac) |
 | `transcript.py` | Unofficial Transcript (HTML) の解析と GPA 計算 |
 | `weeks.py` | 「第 N 週」「どのクォーターか」の判定 |
+| `coursemap.py` | シラバスから使う道具を読み取る / 課題の種類ごとの担当を決める |
 | `preview.py` | .docx / .md をブラウザで読める HTML に変換 |
 | `plans.py` | チャージパックの金額(説明文は i18n.py 側) |
 | `mailer.py` | 確認コードの送信(今はモック) |
@@ -207,6 +208,77 @@ AI が作るノート / 課題ドラフト / クイズ回答の**言語も画面
 **Canvas は 403 で断る**(`BLOCKED_SCREENSHOT_HOSTS`)。Canvas は学生自身が
 操作すると決めてあるため。拡張機能側でも同じ判定をしていて、二重の歯止めに
 なっている。結果はノートとしても保存する。
+
+## Canvas の差分同期(変わったものだけ取り込む)
+
+拡張機能は Canvas の公式 API を直接読む(`extension/background.js`)。学生は
+すでにブラウザで Canvas にログインしているので、`credentials: "include"` で
+そのCookieが付く。**APIトークンも2FAも要らない。**
+
+初回だけ全科目を巡回し、2回目以降は「変わった課題」だけを送る:
+
+1. 拡張機能が `GET /api/extension/state` を叩く
+2. サーバーが `assignment_state` を返す
+   … `{科目名: {Canvas課題ID: canvas_updated_at}}`
+3. 拡張機能が Canvas から課題一覧を取り、`updated_at` を突き合わせる
+4. **一致したものは送らない。** 1件も変わっていない科目は POST 自体を省く
+5. 送られてきたぶんだけ `assignments` に upsert する
+
+つまり「Canvas に何が変わったか聞く」1回だけは残るが、そこから先の送信・
+DB書き込み・下書き生成は変更があったぶんだけになる。`updated_at` が無い
+課題は判断できないので、安全側に倒して毎回送る。
+
+同期のたびに取るもの:
+
+| 中身 | 入る場所 |
+|---|---|
+| シラバス | ノート (`kind='syllabus'`) |
+| 週ごとのモジュール構成 | ノート (`kind='modules'`) |
+| 課題(締切・配点・説明) | `assignments` テーブル |
+| 採点基準(ルーブリック) | `assignments.rubric` |
+| 使う道具 | `courses.tools`(JSON) |
+
+ルーブリックは Canvas が課題に付けているときしか返らない。次の同期で
+返ってこなくても**消さない**(`COALESCE` で既存を残す)。
+
+### 差分同期で一覧ノートを作り直さない理由
+
+差分同期の payload には `partial: true` が付く。このとき課題の一覧ノート
+(`kind='assignments'`)を作り直すと、**変わっていない課題が一覧から消える**。
+なので partial のときは表への取り込みだけ行い、まとめノートは触らない。
+
+## 科目の文脈(どんな道具を使う科目か)
+
+`coursemap.py` がシラバス本文を語彙表(`TOOL_VOCAB`)と突き合わせて、その
+科目で使う道具を拾う。例:
+
+> Programs must compile with `g++ -std=c++17` … checked with Valgrind
+
+→ `C++17` / `GCC` / `Valgrind`
+
+**LLM は使わない。** 同期のたびに走るのでトークン代が積み上がること、
+同じシラバスから毎回ぶれずに同じ結果が出てほしいことが理由。語彙を足したい
+ときは `TOOL_VOCAB` に1行足すだけでよい。
+
+結果は科目ページ(`/notes/course/<id>`)の「科目の文脈」カードに出る。
+同じカードに「誰が何を担当するか」も出す:
+
+| 課題の種類 | 担当 |
+|---|---|
+| `quiz` | `quiz.py` · `notes.py` |
+| `short` | `assignment.py` · `notes.py` |
+| `essay` | **なし**(本人が書く) |
+| `other` | `assignment.py` |
+
+`AGENT_ALLOCATION` の `essay` を空のままにしてある限り、エッセイが
+エージェントに回ることはない。
+
+## 新しい週が始まったとき
+
+拡張機能が毎週月曜 00:05(端末の時計)に起き、差分同期をしてから
+`GET /api/extension/week` を叩く。返るのは**今週の課題の一覧だけ**で、
+下書きは作らない。何を手伝わせるかは `/assignments` で本人が選ぶ、という
+流れを崩さないため。すでに下書き済みのものは一覧から外れる。
 
 ## 下書き完了の通知
 

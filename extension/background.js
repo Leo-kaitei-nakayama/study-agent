@@ -17,6 +17,7 @@ const SYNC_ALARM = "studyAgentSync";
 const SYNC_PERIOD_MIN = 360; // 6時間
 const NOTIFY_ALARM = "studyAgentNotify";
 const NOTIFY_PERIOD_MIN = 30;   // 下書きができたかを見に行く間隔
+const WEEK_ALARM = "studyAgentWeek";  // 毎週月曜、新しい週の始まり
 
 // スクリーンショットを撮らないサイト。
 // Canvas は「学生自身が操作する」と決めてあるので、こちらからは触らない。
@@ -153,7 +154,44 @@ async function fetchAssignments(courseId) {
     name: a.name || "",
     due_at: a.due_at || null,
     points: a.points_possible ?? null,
+    url: a.html_url || null,
+    // Canvas 側の最終更新時刻。次回の同期でこれを比べて、変わっていない
+    // 課題は送らない(= サーバーも書かない)。差分同期の要。
+    updated_at: a.updated_at || null,
     description: htmlToText(a.description || "").slice(0, 2000),
+    rubric: rubricToText(a.rubric),
+  }));
+}
+
+// ルーブリック(採点基準)を読める文にする。
+// Canvas は課題にルーブリックが付いているときだけ rubric 配列を返すので、
+// 無いことのほうが多い。無ければ空文字。
+function rubricToText(rubric) {
+  if (!Array.isArray(rubric) || rubric.length === 0) return "";
+  const lines = [];
+  for (const r of rubric.slice(0, 30)) {
+    if (!r) continue;
+    const pts = r.points != null ? ` (${r.points} pts)` : "";
+    lines.push(`- ${htmlToText(r.description || "(no name)")}${pts}`);
+    const long = htmlToText(r.long_description || "").trim();
+    if (long) lines.push(`    ${long.replace(/\n+/g, " ").slice(0, 300)}`);
+  }
+  return lines.join("\n").slice(0, 4000);
+}
+
+// 週ごとのモジュール構成。「Week 3 — Sorting」のような並びが取れるので、
+// 課題名に週が書かれていない科目でも週の見当がつく。
+async function fetchModules(courseId) {
+  const data = await canvasGet(
+    `/api/v1/courses/${courseId}/modules?include[]=items&per_page=50`);
+  if (!Array.isArray(data)) return [];
+  return data.filter((m) => m && m.id).map((m) => ({
+    id: m.id,
+    name: m.name || "",
+    position: m.position ?? null,
+    items: (m.items || []).slice(0, 40).map((it) => ({
+      title: it.title || "", type: it.type || "", url: it.html_url || null,
+    })),
   }));
 }
 
@@ -260,7 +298,17 @@ async function fullCrawl(token) {
     try {
       entry.assignments = await fetchAssignments(course.id);
       parts.push(`${entry.assignments.length} assignment(s)`);
+      const withRubric = entry.assignments.filter((a) => a.rubric).length;
+      if (withRubric) parts.push(`${withRubric} rubric(s)`);
     } catch (e) { failed = true; }
+
+    // 週ごとの構成。取れない科目(モジュールを使っていない)もあるので、
+    // 失敗しても failed 扱いにはしない。
+    await progressUpdate(i, "running", "reading weekly modules...");
+    try {
+      entry.modules = await fetchModules(course.id);
+      if (entry.modules.length) parts.push(`${entry.modules.length} module(s)`);
+    } catch (e) { entry.modules = []; }
 
     payload.courses.push(entry);
     await progressUpdate(i, failed ? "error" : "done",
@@ -275,28 +323,61 @@ async function fullCrawl(token) {
 
 // 2回目以降: 記憶済みの科目IDを使い、課題の更新だけを直接確認する。
 // シラバスは初回で取得済みなので触らない(=そのページには二度と行かない)。
+//
+// さらに、サーバーが持っている課題の updated_at を先に聞いてから比べ、
+// **変わった課題だけ** を送る。1件も変わっていない科目は POST 自体を省く。
+// Canvas への問い合わせは科目ごとに1回必要(何が変わったかは聞かないと
+// 分からないため)だが、そこから先の送信・DB書き込み・下書き生成は
+// 変更があったぶんだけになる。
 async function incrementalSync(token, courseMap) {
+  let state = {};
+  try { state = await apiGet("/api/extension/state", token); } catch (e) {}
+  const known = state.assignment_state || {};
+
   const payload = { courses: [] };
   const names = Object.keys(courseMap);
-  await progressInit("Incremental (using saved course list)", names);
+  await progressInit("Incremental (changed assignments only)", names);
 
+  let sent = 0, skipped = 0;
   for (let i = 0; i < names.length; i++) {
     const name = names[i];
     await progressUpdate(i, "running", "checking assignments...");
-    const entry = { name, canvas_id: courseMap[name] };
+    const seen = known[name] || {};
     try {
-      entry.assignments = await fetchAssignments(courseMap[name]);
-      payload.courses.push(entry);
-      await progressUpdate(i, "done", `${entry.assignments.length} assignment(s)`);
+      const all = await fetchAssignments(courseMap[name]);
+      // updated_at が同じものは「前に取ったまま」なので送らない。
+      // updated_at が無い課題は判断できないので、安全側に倒して送る。
+      const changed = all.filter((a) => {
+        if (!a.updated_at) return true;
+        return seen[String(a.id)] !== a.updated_at;
+      });
+      skipped += all.length - changed.length;
+
+      if (changed.length === 0) {
+        await progressUpdate(i, "skipped",
+          `no change · ${all.length} assignment(s) already current`);
+        continue;
+      }
+      sent += changed.length;
+      payload.courses.push({ name, canvas_id: courseMap[name],
+                             assignments: changed, partial: true });
+      await progressUpdate(i, "done",
+        `${changed.length} new/updated · ${all.length - changed.length} unchanged`);
     } catch (e) {
       await progressUpdate(i, "error", "could not read assignments");
     }
   }
 
+  if (payload.courses.length === 0) {
+    await progressFinish();
+    return { courses: 0,
+             mode: `Incremental — nothing changed (${skipped} already current)` };
+  }
+
   await apiPost("/api/extension/sync", token, payload);
   await progressFinish();
   return { courses: payload.courses.length,
-           mode: "Incremental (using saved course list)" };
+           mode: `Incremental — ${sent} changed, ${skipped} skipped` };
 }
 
 // 記憶した科目一覧を強制的に忘れて、次回フルクロールし直す(手動リセット用)
@@ -340,15 +421,62 @@ async function progressFinish() {
 }
 
 // ---------------------------------------------------------- 起動・定期実行
+// 次の月曜の 00:05(端末の時計)。週の境目は weeks.py と同じく月曜。
+// 00:00 ちょうどを避けて 5 分ずらすのは、日付が変わる瞬間ぴったりだと
+// 端末がスリープから起ききっていないことがあるため。
+function nextMondayStart() {
+  const now = new Date();
+  const target = new Date(now);
+  target.setHours(0, 5, 0, 0);
+  let days = (1 - now.getDay() + 7) % 7;   // 0=日 1=月 … 次の月曜まで何日か
+  if (days === 0 && target.getTime() <= now.getTime()) days = 7;
+  target.setDate(target.getDate() + days);
+  return target.getTime();
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_PERIOD_MIN });
   chrome.alarms.create(NOTIFY_ALARM, { periodInMinutes: NOTIFY_PERIOD_MIN });
+  chrome.alarms.create(WEEK_ALARM,
+    { when: nextMondayStart(), periodInMinutes: 60 * 24 * 7 });
 });
 chrome.runtime.onStartup.addListener(() => { runSync("on startup"); });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM) runSync("scheduled");
   if (alarm.name === NOTIFY_ALARM) pollNotifications();
+  if (alarm.name === WEEK_ALARM) startOfWeek();
 });
+
+// 新しい週の始まり。まず差分同期をして最新の課題を取り込み、その後で
+// 「今週の課題」をまとめて1件だけ通知する。**提出は一切しない。**
+async function startOfWeek() {
+  await runSync("new week");
+  const { token } = await chrome.storage.sync.get({ token: "" });
+  if (!token) return;
+
+  let data;
+  try {
+    data = await apiGet("/api/extension/week", token);
+  } catch (e) {
+    return;   // 通信できなければ黙って次の週を待つ
+  }
+  const items = data.items || [];
+  if (!items.length) return;
+
+  const lines = items.slice(0, 5).map((it) =>
+    `• ${it.name}${it.due ? ` — ${it.due}` : ""}`);
+  if (items.length > 5) lines.push(`…and ${items.length - 5} more`);
+
+  const id = `sa-week-${data.term || ""}-${data.week_no || 0}`;
+  chrome.notifications.create(id, {
+    type: "basic",
+    iconUrl: "icon128.png",
+    title: `Week ${data.week_no} — ${items.length} assignment(s)`,
+    message: lines.join("\n"),
+    contextMessage: data.term || undefined,
+  });
+  if (data.url) notificationLinks[id] = data.url;
+}
 
 // トグルがオンに切り替わった瞬間にも一度走らせる
 chrome.storage.onChanged.addListener((changes, area) => {

@@ -101,6 +101,13 @@ def init_db():
             created_at TEXT NOT NULL,
             UNIQUE (user_id, name)
         );
+        -- 科目の「文脈」。シラバスから機械的に読み取ったもので、LLM は使わない。
+        --   canvas_id  … Canvas 側の科目 ID(拡張機能が覚えている対応表と同じ)
+        --   tools      … その科目で使う道具の JSON 配列(C++17 / GCC / Valgrind …)
+        --   context_at … 最後に読み取った日時。シラバスが変わらなければ作り直さない
+        ALTER TABLE courses ADD COLUMN IF NOT EXISTS canvas_id BIGINT;
+        ALTER TABLE courses ADD COLUMN IF NOT EXISTS tools TEXT;
+        ALTER TABLE courses ADD COLUMN IF NOT EXISTS context_at TEXT;
         CREATE TABLE IF NOT EXISTS notes (
             id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id),
@@ -138,6 +145,13 @@ def init_db():
         -- 下書きができたことを拡張機能から通知した日時。
         -- NULL のあいだは「まだ知らせていない」= 通知待ち。
         ALTER TABLE assignments ADD COLUMN IF NOT EXISTS notified_at TEXT;
+        -- Canvas 側の課題 ID と最終更新時刻。
+        -- 同期のたびに canvas_updated_at を比べ、変わっていない課題は
+        -- 書き込みも LLM 呼び出しもせずに飛ばす(通信・DB・トークンの節約)。
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS canvas_id BIGINT;
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS canvas_updated_at TEXT;
+        -- 採点基準(ルーブリック)。Canvas が課題に付けていれば同期時に入る。
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS rubric TEXT;
         CREATE TABLE IF NOT EXISTS canvas_accounts (
             user_id INTEGER PRIMARY KEY REFERENCES users(id),
             base_url TEXT NOT NULL,
@@ -620,27 +634,85 @@ def delete_all_notes(user_id: int, course_id: int | None = None,
 def upsert_assignment(user_id: int, course_id: int | None, name: str,
                       due_at: str | None = None, points=None, url: str | None = None,
                       description: str | None = None, week_no: int | None = None,
-                      term: str | None = None, kind: str = "other") -> int:
+                      term: str | None = None, kind: str = "other",
+                      canvas_id: int | None = None,
+                      canvas_updated_at: str | None = None,
+                      rubric: str | None = None) -> int:
     """Canvas から取り込んだ課題を 1 件登録(同じ名前があれば更新)。
 
     status と note_id は上書きしない。エージェントが下書きを作った実績を
     同期のたびに消してしまわないため。
+
+    canvas_updated_at は Canvas 側の最終更新時刻。次の同期でこれと比べて
+    「変わっていない課題」を丸ごと飛ばす(assignment_sync_state を参照)。
     """
     now = datetime.utcnow().isoformat()
     with _conn() as c:
         row = c.execute("""
             INSERT INTO assignments (user_id, course_id, name, due_at, points, url,
                                      description, week_no, term, kind,
+                                     canvas_id, canvas_updated_at, rubric,
                                      created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, course_id, name) DO UPDATE SET
                 due_at=EXCLUDED.due_at, points=EXCLUDED.points, url=EXCLUDED.url,
                 description=EXCLUDED.description, week_no=EXCLUDED.week_no,
-                term=EXCLUDED.term, kind=EXCLUDED.kind, updated_at=EXCLUDED.updated_at
+                term=EXCLUDED.term, kind=EXCLUDED.kind,
+                canvas_id=EXCLUDED.canvas_id,
+                canvas_updated_at=EXCLUDED.canvas_updated_at,
+                -- ルーブリックは「来なかった」ときに消さない。Canvas は課題一覧に
+                -- 必ずしも rubric を載せないので、上書きすると取得済みの内容が
+                -- 消えてしまう。
+                rubric=COALESCE(EXCLUDED.rubric, assignments.rubric),
+                updated_at=EXCLUDED.updated_at
             RETURNING id
         """, (user_id, course_id, name, due_at, points, url, description,
-              week_no, term, kind, now, now)).fetchone()
+              week_no, term, kind, canvas_id, canvas_updated_at, rubric,
+              now, now)).fetchone()
         return row["id"]
+
+
+def assignment_sync_state(user_id: int) -> dict:
+    """「この科目のこの課題は、Canvas のいつ時点のものを持っているか」を返す。
+
+    形は {科目名: {"<canvas_id>": "<canvas_updated_at>"}}。
+    拡張機能はこれを取ってから Canvas を読み、updated_at が同じ課題は
+    サーバーに送らない。送られてこなければ DB も書かないので、
+    通信・書き込み・LLM 呼び出しがまとめて減る。
+    """
+    out: dict[str, dict[str, str]] = {}
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT c.name AS course_name, a.canvas_id, a.canvas_updated_at
+            FROM assignments a JOIN courses c ON c.id = a.course_id
+            WHERE a.user_id=%s AND a.canvas_id IS NOT NULL
+              AND a.canvas_updated_at IS NOT NULL
+        """, (user_id,)).fetchall()
+    for r in rows:
+        out.setdefault(r["course_name"], {})[str(r["canvas_id"])] = r["canvas_updated_at"]
+    return out
+
+
+def set_course_context(user_id: int, course_id: int,
+                       canvas_id: int | None = None,
+                       tools: str | None = None) -> None:
+    """科目の文脈(Canvas ID・使う道具の一覧)を保存する。
+
+    tools は JSON 文字列。None のものは既存の値を残す(同期のたびに
+    シラバスを読み直すわけではないので、消してしまわないようにする)。
+    """
+    # 道具を入れ直したときだけ「いつ読み取ったか」を更新する。
+    # 明示的にキャストするのは、NULL を渡したとき Postgres が型を決められず
+    # IndeterminateDatatype で落ちるため。
+    stamped = datetime.utcnow().isoformat() if tools is not None else None
+    with _conn() as c:
+        c.execute("""
+            UPDATE courses SET
+                canvas_id  = COALESCE(%s::bigint, canvas_id),
+                tools      = COALESCE(%s::text, tools),
+                context_at = COALESCE(%s::text, context_at)
+            WHERE user_id=%s AND id=%s
+        """, (canvas_id, tools, stamped, user_id, course_id))
 
 
 def list_assignments(user_id: int, term: str | None = None,

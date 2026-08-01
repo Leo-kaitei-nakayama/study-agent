@@ -437,6 +437,33 @@ a.cell-sub:hover { text-decoration: underline; }
 
 .show-all-row { text-align: center; margin: -4px 0 20px; }
 
+/* ------------------------------------------------ 科目の文脈カード
+   シラバスから読み取った道具(チップ)と、課題の種類ごとの担当。
+   見た目は .grade-pill にそろえてある(同じ「小さなラベル」なので)。 */
+.context-heading {
+  font-size: 13px; font-weight: 600; color: var(--text-2);
+  margin: 18px 0 8px;
+}
+.context-card .card-title + .fine-print { margin-top: 6px; }
+.tool-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tool-chip {
+  display: inline-block; background: var(--accent-bg); color: var(--accent-text);
+  border-radius: 6px; padding: 3px 9px; font-size: 12px; font-weight: 600;
+}
+.duty-list { display: flex; flex-direction: column; gap: 2px; }
+.duty-row {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding: 6px 0; font-size: 13px; flex-wrap: wrap;
+  border-top: 1px solid var(--border);
+}
+.duty-row:first-child { border-top: none; }
+.duty-kind { display: inline-flex; align-items: center; gap: 8px; }
+.duty-agent code {
+  font-size: 12px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 6px; margin-left: 6px;
+}
+.duty-agent code:first-child { margin-left: 0; }
+
 /* ------------------------------------------------ 削除の選択画面 */
 .scope-option { padding: 6px 0; }
 .scope-option input { width: auto; margin: 0; }
