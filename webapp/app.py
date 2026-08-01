@@ -36,6 +36,7 @@ import weeks
 from i18n import t
 from plans import DEFAULT_PLAN, PLANS
 from study_agent import llm as study_llm
+from study_agent import planner, router
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")
@@ -706,7 +707,8 @@ def api_extension_state():
                 for p in pending]}
 
 
-@app.route("/api/extension/sync", methods=["POST"])
+@app.route("/api/courses/sync", methods=["POST"])          # 正式なパス
+@app.route("/api/extension/sync", methods=["POST"])       # 旧パス(配布済み拡張機能用)
 def api_extension_sync():
     """科目・シラバス・課題をまとめて受け取る(自動モードの受け口)。"""
     user_id = _extension_user_id()
@@ -722,6 +724,9 @@ def api_extension_sync():
     saved_assignments = 0
     saved_assignment_rows = 0
     saved_modules = 0
+    skipped_unchanged = 0
+    # 前回取り込んだときの「中身の指紋」。同じものは書き直さない。
+    known_hashes = db.unchanged_assignment_hashes(user_id)
     # 拡張機能からの呼び出しにはセッションが無いので、作るノートの言語は
     # プロフィールに保存されたものを使う(既定は英語)。
     user_lang = db.get_lang(user_id)
@@ -818,6 +823,20 @@ def api_extension_sync():
                     a_canvas_id = int(a_canvas_id) if a_canvas_id is not None else None
                 except (TypeError, ValueError):
                     a_canvas_id = None
+
+                # 中身の指紋。前回と同じなら DB に触らない。
+                # 拡張機能は updated_at で絞ってから送ってくるが、Canvas は
+                # 表示順を直しただけでも updated_at を進めるので、ここでもう一度
+                # 「本当に中身が変わったか」を見る。
+                a_rubric = (a.get("rubric") or "").strip()[:4000] or None
+                fresh = db.content_hash(a_name, desc[:4000] or None, due_at, a_rubric)
+                if a_canvas_id is not None and known_hashes.get(str(a_canvas_id)) == fresh:
+                    rows.append((weeks.week_of(a_name, due_at), a_name, due_at,
+                                 a.get("points"), _assignment_kind(a_name, desc),
+                                 bool(a_rubric)))
+                    skipped_unchanged += 1
+                    continue
+
                 db.upsert_assignment(
                     user_id, course_id, a_name, due_at=due_at,
                     points=a.get("points"), url=a.get("url"),
@@ -827,7 +846,7 @@ def api_extension_sync():
                     kind=_assignment_kind(a_name, desc),
                     canvas_id=a_canvas_id,
                     canvas_updated_at=a.get("updated_at") or None,
-                    rubric=(a.get("rubric") or "").strip()[:4000] or None)
+                    rubric=a_rubric, hash_=fresh)
                 saved_assignment_rows += 1
                 rows.append((weeks.week_of(a_name, due_at), a_name, due_at,
                              a.get("points"), _assignment_kind(a_name, desc),
@@ -862,6 +881,7 @@ def api_extension_sync():
             "syllabi": saved_syllabi, "assignments": saved_assignments,
             "modules": saved_modules,
             "assignment_rows": saved_assignment_rows,
+            "unchanged": skipped_unchanged,
             "pruned": [p["name"] for p in pruned],
             "pending_external_syllabi": [
                 {"url": p["url"], "label": p["label"],
@@ -1267,6 +1287,92 @@ def _read_uploaded_image(req):
         return raw, m.group(1), None
 
     return None, None, t("ask.need_image")
+
+
+@app.route("/api/study/generate-draft", methods=["POST"])
+def api_generate_draft():
+    """拡張機能の引き出しから呼ばれる。課題 1 件の下書きを作って返す。
+
+    受け取るもの(すべて拡張機能が知っていること):
+      url, in_iframe, context   … どこのページか(router.detect_context が判定)
+      page_text                 … そのページの本文。**外部サイトではこれが要**
+      course_name / assignment_name
+      assignment_id             … 分かっていれば下書き済みの印を付ける
+
+    Canvas の外(Gradescope / zyBooks など)はサーバーから取りに行かない。
+    学生のブラウザはすでにログイン済みなので、拡張機能が読んだ本文を
+    送ってもらうほうが確実だから(router.py の冒頭参照)。
+    """
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+    if not db.has_credit(user_id):
+        return {"error": "no credit left", "reason": "no_credit"}, 402
+
+    payload = request.get_json(silent=True) or {}
+    course_name = (payload.get("course_name") or "").strip()
+
+    # 科目が分かればその文脈(使う道具)と今週のノートを足す
+    course = None
+    if coursemap.is_real_course(course_name):
+        course_id = db.add_course(user_id, course_name)
+        course = db.get_course(user_id, course_id)
+    strategy = planner.strategy_from_json(course["tools"]) if course else None
+
+    # 課題が特定できていれば、種類・ルーブリック・保存済みの説明文を使う
+    stored_description = rubric = ""
+    kind = "other"
+    assignment = None
+    raw_id = str(payload.get("assignment_id") or "")
+    if raw_id.isdigit():
+        found = db.get_assignments_by_ids(user_id, [int(raw_id)])
+        if found:
+            assignment = found[0]
+            stored_description = assignment["description"] or ""
+            rubric = assignment["rubric"] or ""
+            kind = assignment["kind"]
+
+    if kind == "essay":
+        # 指定どおり、長文は本人が計画する。ここで止める。
+        return {"error": "essays are written by the student",
+                "reason": "essay_is_yours"}, 422
+
+    term = (assignment["term"] if assignment else None) or weeks.term_of()
+    week_no = (assignment["week_no"] if assignment else None) or weeks.week_of()
+    notes = _week_notes_context(user_id, term, week_no)
+
+    try:
+        result = router.route(
+            payload, course_name=course_name,
+            stored_description=stored_description, kind=kind,
+            strategy=strategy, rubric=rubric, notes=notes,
+            lang=i18n.ai_output_lang(db.get_lang(user_id)),
+            api_keys=MASTER_KEYS,
+            usage_callback=_make_usage_callback(user_id, "generate_draft"),
+            routing=_user_routing(user_id))
+    except router.PromptUnavailable as e:
+        # 「本文を送ってくれ」など、拡張機能が次に何をすればいいか分かる形で返す
+        return {"error": str(e), "reason": e.reason}, 422
+    except Exception as e:  # noqa: BLE001
+        app.logger.warning("generate-draft failed: %s", e)
+        return {"error": str(e), "reason": "failed"}, 500
+
+    # 下書きをノートとして残し、課題があれば紐づける
+    name = (payload.get("assignment_name") or "draft").strip()
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    filename = f"{user_id}_{stamp}_draft_{re.sub(r'[^A-Za-z0-9_-]+', '_', name)[:40]}.md"
+    (OUTPUT_DIR / filename).write_text(result["draft"], encoding="utf-8")
+    note_id = db.add_note(user_id, course["id"] if course else None, "draft",
+                          filename, name,
+                          title=weeks.note_title(name, week=week_no),
+                          week_no=week_no, term=term)
+    if assignment:
+        db.set_assignment_status(user_id, assignment["id"], "drafted",
+                                 note_id=note_id)
+
+    return {"draft": result["draft"], "context": result["context"],
+            "source": result["source"], "platform": result["platform"],
+            "note_url": url_for("notes_view", note_id=note_id, _external=True)}
 
 
 @app.route("/api/extension/notifications", methods=["GET"])

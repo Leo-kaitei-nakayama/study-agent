@@ -152,6 +152,12 @@ def init_db():
         ALTER TABLE assignments ADD COLUMN IF NOT EXISTS canvas_updated_at TEXT;
         -- 採点基準(ルーブリック)。Canvas が課題に付けていれば同期時に入る。
         ALTER TABLE assignments ADD COLUMN IF NOT EXISTS rubric TEXT;
+        -- 本文 + 締切の SHA256。canvas_updated_at の補強。
+        --   updated_at … Canvas が「触った」と言っている時刻。表示順を変えた
+        --                だけでも進むので、中身が同じでも変わることがある
+        --   content_hash … 実際の中身。これが同じなら再処理する意味がない
+        -- 両方見て「本当に変わったものだけ」を作り直す。
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS content_hash TEXT;
         CREATE TABLE IF NOT EXISTS canvas_accounts (
             user_id INTEGER PRIMARY KEY REFERENCES users(id),
             base_url TEXT NOT NULL,
@@ -704,7 +710,8 @@ def upsert_assignment(user_id: int, course_id: int | None, name: str,
                       term: str | None = None, kind: str = "other",
                       canvas_id: int | None = None,
                       canvas_updated_at: str | None = None,
-                      rubric: str | None = None) -> int:
+                      rubric: str | None = None,
+                      hash_: str | None = None) -> int:
     """Canvas から取り込んだ課題を 1 件登録(同じ名前があれば更新)。
 
     status と note_id は上書きしない。エージェントが下書きを作った実績を
@@ -719,8 +726,8 @@ def upsert_assignment(user_id: int, course_id: int | None, name: str,
             INSERT INTO assignments (user_id, course_id, name, due_at, points, url,
                                      description, week_no, term, kind,
                                      canvas_id, canvas_updated_at, rubric,
-                                     created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     content_hash, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id, course_id, name) DO UPDATE SET
                 due_at=EXCLUDED.due_at, points=EXCLUDED.points, url=EXCLUDED.url,
                 description=EXCLUDED.description, week_no=EXCLUDED.week_no,
@@ -731,12 +738,49 @@ def upsert_assignment(user_id: int, course_id: int | None, name: str,
                 -- 必ずしも rubric を載せないので、上書きすると取得済みの内容が
                 -- 消えてしまう。
                 rubric=COALESCE(EXCLUDED.rubric, assignments.rubric),
+                content_hash=EXCLUDED.content_hash,
                 updated_at=EXCLUDED.updated_at
             RETURNING id
         """, (user_id, course_id, name, due_at, points, url, description,
               week_no, term, kind, canvas_id, canvas_updated_at, rubric,
+              hash_ or content_hash(name, description, due_at, rubric),
               now, now)).fetchone()
         return row["id"]
+
+
+def content_hash(title: str | None, description: str | None,
+                 due_at: str | None = None, rubric: str | None = None) -> str:
+    """課題の「中身」の指紋。SHA256。
+
+    Canvas の updated_at は当てにならないことがある(教員が表示順を直しただけ
+    でも進む)。逆に updated_at を返さない課題もある。そこで本文そのものから
+    指紋を取り、**中身が変わったときだけ** 作り直す。
+
+    区切りに \x1f を使うのは、題名の末尾と説明の先頭がつながって別の課題と
+    同じ指紋になるのを防ぐため。
+    """
+    import hashlib
+
+    parts = [(title or "").strip(), (description or "").strip(),
+             (due_at or "").strip(), (rubric or "").strip()]
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
+def unchanged_assignment_hashes(user_id: int) -> dict:
+    """{Canvas課題ID: content_hash}。同期側が「変わっていない」を判断する材料。
+
+    assignment_sync_state() が updated_at を返すのと対になっている。
+    どちらか一方でも一致しなければ作り直す、という使い方をする。
+    """
+    out: dict[str, str] = {}
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT canvas_id, content_hash FROM assignments "
+            "WHERE user_id=%s AND canvas_id IS NOT NULL AND content_hash IS NOT NULL",
+            (user_id,)).fetchall()
+    for r in rows:
+        out[str(r["canvas_id"])] = r["content_hash"]
+    return out
 
 
 def assignment_sync_state(user_id: int) -> dict:

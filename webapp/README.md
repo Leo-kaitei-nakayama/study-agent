@@ -14,7 +14,7 @@
 | `school.py` | 学校ごとの定数(UCI: クォーター制 / 卒業180単位 / AntAlmanac) |
 | `transcript.py` | Unofficial Transcript (HTML) の解析と GPA 計算 |
 | `weeks.py` | 「第 N 週」「どのクォーターか」の判定 |
-| `coursemap.py` | シラバスから使う道具を読み取る / 課題の種類ごとの担当を決める |
+| `coursemap.py` | 科目名のふるい / 課題の担当決め(語彙表は `study_agent/planner.py`) |
 | `preview.py` | .docx / .md をブラウザで読める HTML に変換 |
 | `plans.py` | チャージパックの金額(説明文は i18n.py 側) |
 | `mailer.py` | 確認コードの送信(今はモック) |
@@ -254,6 +254,49 @@ AI が作るノート / 課題ドラフト / クイズ回答の**言語も画面
 
 受け付けるのは PNG / JPEG / WebP で、上限は `MAX_UPLOAD_BYTES`(10MB)。
 弾いた入力では LLM を呼ばないので、間違った操作で課金されることはない。
+
+## 課題文をどこから取るか (`study_agent/router.py`)
+
+`POST /api/study/generate-draft` は、拡張機能の引き出し(`extension/drawer.js`)
+から呼ばれる。課題文の出どころを 3 つに見分ける:
+
+| 文脈 | 例 | 課題文の取り方 |
+|---|---|---|
+| `CANVAS_NATIVE` | Canvas の課題ページ | 同期済みの `assignments.description` |
+| `EMBEDDED_LTI` | Canvas に iframe で埋まった Gradescope | **拡張機能が読んだ本文** |
+| `EXTERNAL_PLATFORM` | zyBooks / Pearson などの別サイト | **拡張機能が読んだ本文** |
+
+**サーバーから外部サイトを取りに行かない。** 学生のブラウザはすでにその
+サイトにログインしているので、拡張機能が読んだ本文を送ってもらうほうが確実:
+
+- サーバーから Playwright で行くとログイン画面で止まる
+- 突破しようとすると保存したパスワードを使うことになり、2FA が出れば
+  画面の無いサーバー(Render)では誰も応じられない
+- そもそも学生が今見ているページなので、読み直す必要がない
+
+`study_agent/browser.py` を使う道は残してあるが、既定では無効
+(`ALLOW_SERVER_BROWSER=1` のときだけ。手元の CLI 実行を想定)。
+本文が無いまま外部サイトを頼まれたら **422 と `reason=needs_page_text`** を
+返し、拡張機能が「そのページで押してください」と案内できるようにする。
+
+エッセイは `422 / reason=essay_is_yours` で断る(指定どおり本人が書く)。
+**提出はしない。** 生成物の先頭には必ず `> DRAFT` の断り書きが入る。
+
+## 中身の指紋で二重処理を防ぐ (SHA256)
+
+`assignments.content_hash` は「題名 + 説明 + 締切 + ルーブリック」の SHA256。
+`canvas_updated_at` と併用する:
+
+| 見るもの | 何が分かるか | 弱点 |
+|---|---|---|
+| `canvas_updated_at` | Canvas が触った時刻 | 表示順を直しただけでも進む / 無い課題もある |
+| `content_hash` | 実際の中身 | 取ってこないと分からない |
+
+拡張機能が `updated_at` で粗く絞り、サーバーが指紋で最終確認する。
+指紋が同じなら DB に書かない(応答の `unchanged` に件数が出る)。
+
+区切りに `\x1f` を挟むのは、題名の末尾と説明の先頭がつながって別の課題と
+同じ指紋になるのを防ぐため。
 
 ## Canvas の差分同期(変わったものだけ取り込む)
 
