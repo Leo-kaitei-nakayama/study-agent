@@ -15,6 +15,21 @@ const API_BASE = "https://study-agent-500j.onrender.com";
 const CANVAS_BASE = "https://canvas.eee.uci.edu";
 const SYNC_ALARM = "studyAgentSync";
 const SYNC_PERIOD_MIN = 360; // 6時間
+const NOTIFY_ALARM = "studyAgentNotify";
+const NOTIFY_PERIOD_MIN = 30;   // 下書きができたかを見に行く間隔
+
+// スクリーンショットを撮らないサイト。
+// Canvas は「学生自身が操作する」と決めてあるので、こちらからは触らない。
+const SCREENSHOT_BLOCKED = ["canvas.eee.uci.edu", "instructure.com"];
+
+function screenshotBlocked(url) {
+  try {
+    const host = new URL(url).hostname;
+    return SCREENSHOT_BLOCKED.some((h) => host.includes(h));
+  } catch (e) {
+    return true;   // URL が読めないページ(chrome:// など)では撮らない
+  }
+}
 
 // ---------------------------------------------------------- サーバー通信
 async function apiPost(path, token, body) {
@@ -327,10 +342,12 @@ async function progressFinish() {
 // ---------------------------------------------------------- 起動・定期実行
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(SYNC_ALARM, { periodInMinutes: SYNC_PERIOD_MIN });
+  chrome.alarms.create(NOTIFY_ALARM, { periodInMinutes: NOTIFY_PERIOD_MIN });
 });
 chrome.runtime.onStartup.addListener(() => { runSync("on startup"); });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM) runSync("scheduled");
+  if (alarm.name === NOTIFY_ALARM) pollNotifications();
 });
 
 // トグルがオンに切り替わった瞬間にも一度走らせる
@@ -346,6 +363,70 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+// ------------------------------------------------ スクリーンショット
+// アイコンから呼ばれる。activeTab 権限なので、ユーザーが押した瞬間だけ撮れる。
+async function captureAndAsk({ mode, prompt, courseName }) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) throw new Error("No active tab.");
+  if (screenshotBlocked(tab.url)) {
+    // Canvas では撮らない。サーバー側でも同じ判定をしている(二重の歯止め)。
+    return { ok: false, blocked: true,
+             error: "Screenshots are turned off on Canvas. You drive Canvas yourself." };
+  }
+
+  const image = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const { token } = await chrome.storage.sync.get({ token: "" });
+  if (!token) throw new Error("No token set.");
+
+  const data = await apiPost("/api/extension/screenshot", token, {
+    image, mode, prompt: prompt || "", url: tab.url || "",
+    course_name: courseName || "",
+  });
+  return { ok: true, data };
+}
+
+// ------------------------------------------------ 下書き完了の通知
+// **提出はしない。** 「下書きができた」ことだけを知らせる。
+// 通知 ID → 開く URL。クリックしたときにその下書きを開くために覚えておく。
+const notificationLinks = {};
+
+async function pollNotifications() {
+  const { token } = await chrome.storage.sync.get({ token: "" });
+  if (!token) return;
+
+  let data;
+  try {
+    data = await apiGet("/api/extension/notifications", token);
+  } catch (e) {
+    return;   // 通信できないときは黙って次の周期を待つ
+  }
+
+  const pending = data.pending || [];
+  if (!pending.length) return;
+
+  for (const item of pending) {
+    chrome.notifications.create(`sa-draft-${item.id}`, {
+      type: "basic",
+      iconUrl: "icon128.png",
+      title: "Draft ready",
+      message: `${item.name} — review it before you submit anything.`,
+      contextMessage: item.course || undefined,
+    });
+    if (item.url) notificationLinks[`sa-draft-${item.id}`] = item.url;
+  }
+
+  // 出し終えたら印を付ける(同じ通知を毎回出さないため)
+  await apiPost("/api/extension/notifications/ack", token,
+                { ids: pending.map((p) => p.id) });
+}
+
+// 通知をクリックしたら、その下書きを開く
+chrome.notifications.onClicked.addListener((id) => {
+  const url = notificationLinks[id];
+  if (url) chrome.tabs.create({ url });
+  chrome.notifications.clear(id);
+});
+
 // ------------------------------------------------------ メッセージ受信
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
@@ -356,6 +437,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         } catch (e) {
           sendResponse({ ok: false, error: String(e.message || e) });
         }
+        return;
+      }
+      if (msg.action === "screenshot") {
+        sendResponse(await captureAndAsk(msg));
+        return;
+      }
+      if (msg.action === "checkNotifications") {
+        await pollNotifications();
+        sendResponse({ ok: true });
         return;
       }
       if (msg.action === "syncNow") {

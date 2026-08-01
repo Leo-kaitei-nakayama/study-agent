@@ -1,11 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Study Agent Canvas Sync",
-  "version": "0.1.0",
-  "description": "Syncs your Canvas courses, syllabi and assignments, and drafts answers for practice questions. Opt-in; never submits anything.",
+  "version": "0.2.0",
+  "description": "Syncs your Canvas courses, syllabi and assignments, drafts answers for practice questions, and can explain a screenshot of a page. Opt-in; never submits anything.",
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "activeTab",
+    "notifications"
   ],
   "host_permissions": [
     "https://canvas.eee.uci.edu/*",

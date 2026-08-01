@@ -14,6 +14,7 @@ import sys
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import (Flask, flash, g, redirect, render_template, request,
                    send_file, session, url_for)
@@ -874,6 +875,130 @@ def api_extension_answer():
                    title=weeks.note_title(question_text[:60]),
                    week_no=weeks.week_of(), term=weeks.term_of())
     return {"answer": answer}
+
+
+# ------------------------------------------- 拡張機能: スクリーンショット
+# PDF の指定:
+#   - アイコンを押すだけで画面を撮って、何をしてほしいかを選ぶ
+#     (explanation / answer / other = 自由入力)
+#   - **Canvas では撮らない。** Canvas は学生自身が操作すると指定されているため、
+#     エージェント側からは触らない。Perusall のように本文を取れないサイトで、
+#     読み物を要約したりコメントを書いたりするために使う。
+SCREENSHOT_MODES = ("explanation", "answer", "other")
+
+#: スクリーンショットを撮らせないホスト(部分一致)。
+BLOCKED_SCREENSHOT_HOSTS = ("canvas.eee.uci.edu", "instructure.com")
+
+#: 受け取る画像の上限(だいたい 8MB のデータURL)。
+MAX_SCREENSHOT_CHARS = 8_000_000
+
+
+def _screenshot_blocked(url: str) -> bool:
+    """そのページで撮ってよいか。Canvas 系は不可。"""
+    host = urlparse(url or "").hostname or ""
+    return any(blocked in host for blocked in BLOCKED_SCREENSHOT_HOSTS)
+
+
+@app.route("/api/extension/screenshot", methods=["POST"])
+def api_extension_screenshot():
+    """スクリーンショット + 「何をしてほしいか」を受け取って答える。
+
+    mode:
+      explanation … 何が書いてあるか / どう考えるかを説明する
+      answer      … 解答の下書きを作る(提出はしない)
+      other       … prompt に書かれた指示に従う
+    """
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+    if not db.has_credit(user_id):
+        return {"error": "no credit left"}, 402
+
+    payload = request.get_json(silent=True) or {}
+    page_url = (payload.get("url") or "").strip()
+    if _screenshot_blocked(page_url):
+        return {"error": "screenshots are disabled on Canvas",
+                "reason": "canvas_blocked"}, 403
+
+    image = (payload.get("image") or "").strip()
+    if not image:
+        return {"error": "image is required"}, 400
+    if len(image) > MAX_SCREENSHOT_CHARS:
+        return {"error": "image too large"}, 413
+
+    # data:image/png;base64,xxxx → media_type と本体に分ける
+    m = re.match(r"^data:(image/(?:png|jpeg|webp));base64,(.+)$", image, re.S)
+    if not m:
+        return {"error": "image must be a base64 data URL"}, 400
+    media_type, image_b64 = m.group(1), m.group(2)
+
+    mode = payload.get("mode") if payload.get("mode") in SCREENSHOT_MODES else "explanation"
+    custom = (payload.get("prompt") or "").strip()
+    course_name = (payload.get("course_name") or "").strip()
+
+    instruction = {
+        "explanation": "Explain what this page is asking and how to think about it. "
+                       "Do not just give a final answer — show the reasoning.",
+        "answer": "Draft an answer to what is on this page. This is a DRAFT for the "
+                  "student to review and edit; never present it as submitted work.",
+        "other": custom or "Describe what is on this page.",
+    }[mode]
+
+    system = (
+        "You are a study tutor looking at a screenshot of a student's coursework. "
+        + instruction +
+        " If the screenshot is unreadable or does not contain a question, say so "
+        "plainly instead of guessing. "
+        f"Write your reply in {i18n.ai_output_lang()}.")
+
+    try:
+        answer = study_llm.complete_vision(
+            system, custom or instruction, image_b64, media_type,
+            api_keys=MASTER_KEYS,
+            usage_callback=_make_usage_callback(user_id, f"screenshot_{mode}"))
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}, 500
+
+    # あとで見返せるようにノートとしても残す
+    course_id = db.add_course(user_id, course_name) if course_name else None
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    filename = f"{user_id}_{stamp}_screenshot_{mode}.md"
+    (OUTPUT_DIR / filename).write_text(
+        f"# {t('ext.screenshot_note_title')} ({mode})\n\n"
+        f"{page_url}\n\n---\n\n{answer}\n", encoding="utf-8")
+    week_no = weeks.week_of()
+    db.add_note(user_id, course_id, "screenshot", filename,
+                f"screenshot ({mode})",
+                title=weeks.note_title(f"screenshot ({mode})", week=week_no),
+                week_no=week_no, term=weeks.term_of())
+
+    return {"answer": answer, "mode": mode}
+
+
+@app.route("/api/extension/notifications", methods=["GET"])
+def api_extension_notifications():
+    """下書きができたのにまだ知らせていない課題を返す(拡張機能が定期的に取りに来る)。"""
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+    pending = db.list_pending_notifications(user_id)
+    return {"pending": [
+        {"id": p["id"], "name": p["name"], "course": p["course_name"],
+         "url": url_for("notes_view", note_id=p["note_id"], _external=True)
+                if p["note_id"] else None}
+        for p in pending]}
+
+
+@app.route("/api/extension/notifications/ack", methods=["POST"])
+def api_extension_notifications_ack():
+    """通知を出し終えたことを記録する(同じ通知を繰り返さないため)。"""
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+    payload = request.get_json(silent=True) or {}
+    ids = [int(v) for v in (payload.get("ids") or [])
+           if str(v).isdigit()]
+    return {"status": "ok", "marked": db.mark_notified(user_id, ids)}
 
 
 # ------------------------------------------------------------------ plans

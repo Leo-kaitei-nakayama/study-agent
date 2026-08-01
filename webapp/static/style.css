@@ -370,7 +370,6 @@ a.cell-sub:hover { text-decoration: underline; }
 .note-title:hover { color: var(--accent-text); text-decoration: underline; }
 .note-row .btn-sm { flex: 0 0 auto; }
 
-.danger-row { margin-top: -6px; text-align: right; }
 
 /* ------------------------------------------------ ノートのプレビュー */
 .doc-actions { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
@@ -444,9 +443,11 @@ a.cell-sub:hover { text-decoration: underline; }
 .note-row.is-selectable { cursor: pointer; margin: 0; }
 .note-row.is-selectable:hover { background: var(--bg); }
 .note-meta { display: block; font-size: 12px; color: var(--text-muted); }
-.form-actions {
+/* 画面下の操作ボタンの行。ノート一覧・削除画面・確認画面で同じ見た目にする。
+   負のマージンを付けると直前のカードやタイルに重なるので付けない。 */
+.page-actions, .form-actions {
   display: flex; gap: 10px; justify-content: flex-end;
-  align-items: center; flex-wrap: wrap; margin-bottom: 20px;
+  align-items: center; flex-wrap: wrap; margin: 20px 0 0;
 }
 .week-heading {
   font-size: 13px; font-weight: 600; color: var(--text-2);
@@ -478,4 +479,3 @@ a.cell-sub:hover { text-decoration: underline; }
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }
 .tile-remove:hover { background: #8a1b1b; }
-.danger-row { display: flex; gap: 10px; justify-content: flex-end; align-items: center; }

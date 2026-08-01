@@ -76,7 +76,7 @@
 {% endif %}
 
 {# ------------------------------------------------ 削除の入口 #}
-<p class="danger-row">
+<div class="page-actions">
   {% if not edit_mode and courses %}
   <a class="btn btn-sm" href="{{ url_for('notes_library', term=selected_term, edit=1) }}">
     {{ t('notes.edit_courses') }}
@@ -85,6 +85,6 @@
   <a class="btn btn-sm btn-danger" href="{{ url_for('notes_delete', term=selected_term) }}">
     {{ t('delete.title') }}
   </a>
-</p>
+</div>
 
 {% endblock %}

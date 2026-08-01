@@ -49,6 +49,19 @@
   .prow.err .dt { color: #b23c3c; }
   .spin { display: inline-block; animation: sp 1s linear infinite; }
   @keyframes sp { to { transform: rotate(360deg); } }
+
+    .shot-mode {
+      display: flex; gap: 8px; align-items: flex-start;
+      font-size: 12px; padding: 5px 0; cursor: pointer;
+    }
+    .shot-mode input { margin: 2px 0 0; flex: 0 0 auto; }
+    .shot-result {
+      margin-top: 10px; padding: 10px; border-radius: 8px;
+      background: #f5f4f0; border: 1px solid #e5e2da;
+      font-size: 12px; line-height: 1.55; max-height: 260px; overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .shot-result.is-error { background: #fdf3f3; border-color: #e8cccc; color: #a52121; }
 </style>
 </head>
 <body>
@@ -106,6 +119,25 @@
     </div>
     <input type="checkbox" id="autoFillAnswers">
   </div>
+
+  <h2>C. Ask about this page</h2>
+  <div class="desc" style="margin-bottom:8px;">
+    Takes a screenshot of the page you are on and asks the agent about it.
+    Turned off on Canvas — you drive Canvas yourself.
+  </div>
+
+  <div id="shotModes">
+    <label class="shot-mode"><input type="radio" name="shotMode" value="explanation" checked>
+      <span><strong>Explanation</strong> — what is being asked, and how to think about it</span></label>
+    <label class="shot-mode"><input type="radio" name="shotMode" value="answer">
+      <span><strong>Answer</strong> — draft an answer (never submitted)</span></label>
+    <label class="shot-mode"><input type="radio" name="shotMode" value="other">
+      <span><strong>Other</strong> — type what you want below</span></label>
+  </div>
+  <input type="text" id="shotPrompt" placeholder="e.g. summarise this reading in 3 bullets"
+         style="display:none;">
+  <button id="shotGo">Take screenshot and ask</button>
+  <div id="shotResult" class="shot-result" style="display:none;"></div>
 
   <h2>Settings</h2>
   <label style="font-size:12px; display:block;">Connection token</label>

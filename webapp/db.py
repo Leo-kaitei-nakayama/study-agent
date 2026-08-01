@@ -135,6 +135,9 @@ def init_db():
             updated_at TEXT NOT NULL,
             UNIQUE (user_id, course_id, name)
         );
+        -- 下書きができたことを拡張機能から通知した日時。
+        -- NULL のあいだは「まだ知らせていない」= 通知待ち。
+        ALTER TABLE assignments ADD COLUMN IF NOT EXISTS notified_at TEXT;
         CREATE TABLE IF NOT EXISTS canvas_accounts (
             user_id INTEGER PRIMARY KEY REFERENCES users(id),
             base_url TEXT NOT NULL,
@@ -690,6 +693,33 @@ def get_assignment(user_id: int, assignment_id: int):
             LEFT JOIN courses c ON c.id = a.course_id
             WHERE a.id=%s AND a.user_id=%s""",
             (assignment_id, user_id)).fetchone()
+
+
+def list_pending_notifications(user_id: int) -> list:
+    """下書きができたのに、まだ本人に知らせていない課題。
+
+    拡張機能が定期的に取りに来て、ブラウザの通知として出す。
+    **提出はしないので、通知は「下書きができた」以上のことは言わない。**
+    """
+    with _conn() as c:
+        return c.execute("""
+            SELECT a.id, a.name, a.note_id, c.name AS course_name
+            FROM assignments a LEFT JOIN courses c ON c.id = a.course_id
+            WHERE a.user_id=%s AND a.status='drafted' AND a.notified_at IS NULL
+            ORDER BY a.updated_at
+        """, (user_id,)).fetchall()
+
+
+def mark_notified(user_id: int, ids: list[int]) -> int:
+    """通知を出し終えた課題に印を付ける(同じ通知を何度も出さないため)。"""
+    if not ids:
+        return 0
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE assignments SET notified_at=%s "
+            "WHERE user_id=%s AND id = ANY(%s) AND notified_at IS NULL",
+            (datetime.utcnow().isoformat(), user_id, list(ids)))
+        return cur.rowcount
 
 
 def set_assignment_status(user_id: int, assignment_id: int, status: str,
