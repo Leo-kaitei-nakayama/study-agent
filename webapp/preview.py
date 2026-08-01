@@ -51,8 +51,14 @@ def to_html(text: str) -> str:
     in_list = False
     in_code = False
 
-    for raw in text.splitlines():
-        line = raw.rstrip()
+    # 表は次の行(区切り行)まで見ないと判断できないので、添字で回す。
+    lines = text.splitlines()
+    i = -1
+    while True:
+        i += 1
+        if i >= len(lines):
+            break
+        line = lines[i].rstrip()
 
         # ``` で囲まれたコードブロック
         if line.strip().startswith("```"):
@@ -94,6 +100,26 @@ def to_html(text: str) -> str:
             out.append(f"<li>{_inline(m.group(1))}</li>")
             continue
 
+        # 表 (| a | b | / |---|---| / | 1 | 2 |)
+        # 課題一覧を1行1件で読めるようにするために足した。区切り行
+        # (|---|---|) が続いていることを見て、表の始まりだと判断する。
+        if _is_table_row(line) and _is_table_divider(_peek(lines, i + 1)):
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            head = _split_row(line)
+            out.append("<table><thead><tr>")
+            out.extend(f"<th>{_inline(c)}</th>" for c in head)
+            out.append("</tr></thead><tbody>")
+            i += 2                                  # 見出しと区切り行を飛ばす
+            while i < len(lines) and _is_table_row(lines[i].rstrip()):
+                out.append("<tr>")
+                out.extend(f"<td>{_inline(c)}</td>" for c in _split_row(lines[i].rstrip()))
+                out.append("</tr>")
+                i += 1
+            out.append("</tbody></table>")
+            continue
+
         # 区切り線
         if re.match(r"^\s*([-*_])\s*(\1\s*){2,}$", line):
             if in_list:
@@ -116,6 +142,30 @@ def to_html(text: str) -> str:
 
 def _close_list(out: list, in_list: bool) -> str | None:
     return "</ul>" if in_list else None
+
+
+# ---------------------------------------------------------------- 表の判定
+def _peek(lines: list[str], idx: int) -> str:
+    return lines[idx].rstrip() if 0 <= idx < len(lines) else ""
+
+
+def _is_table_row(line: str) -> bool:
+    s = line.strip()
+    return s.startswith("|") and s.count("|") >= 2
+
+
+def _is_table_divider(line: str) -> bool:
+    """|---|:--:|---| のような区切り行か。"""
+    s = line.strip()
+    if not _is_table_row(s):
+        return False
+    return all(re.fullmatch(r":?-{2,}:?", c.strip() or "-")
+               for c in _split_row(s))
+
+
+def _split_row(line: str) -> list[str]:
+    """| a | b | → ["a", "b"]。前後の | は落とす。"""
+    return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
 def _inline(text: str) -> str:

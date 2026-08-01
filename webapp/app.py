@@ -697,6 +697,9 @@ def api_extension_sync():
     saved_assignments = 0
     saved_assignment_rows = 0
     saved_modules = 0
+    # 拡張機能からの呼び出しにはセッションが無いので、作るノートの言語は
+    # プロフィールに保存されたものを使う(既定は英語)。
+    user_lang = db.get_lang(user_id)
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     for entry in courses:
@@ -723,14 +726,16 @@ def api_extension_sync():
         if syllabus:
             fn = f"{user_id}_{stamp}_syllabus_{course_id}.md"
             (OUTPUT_DIR / fn).write_text(syllabus, encoding="utf-8")
-            db.add_note(user_id, course_id, "syllabus", fn, f"{name} syllabus",
-                        title=f"{name} syllabus", term=weeks.term_of())
+            syl_title = f"{name} — {i18n.t_in(user_lang, 'notes.kind_syllabus')}"
+            db.add_note(user_id, course_id, "syllabus", fn, syl_title,
+                        title=syl_title, term=weeks.term_of())
             saved_syllabi += 1
 
         # 週ごとのモジュール構成。ノート(kind='modules')として残す。
         modules = entry.get("modules") or []
         if modules:
-            mod_lines = [f"# {name} — weekly modules", ""]
+            mod_title = f"{name} — {i18n.t_in(user_lang, 'notes.kind_modules')}"
+            mod_lines = [f"# {mod_title}", ""]
             for m in modules:
                 if not isinstance(m, dict):
                     continue
@@ -742,7 +747,7 @@ def api_extension_sync():
             fn = f"{user_id}_{stamp}_modules_{course_id}.md"
             (OUTPUT_DIR / fn).write_text("\n".join(mod_lines), encoding="utf-8")
             db.add_note(user_id, course_id, "modules", fn,
-                        f"{name} modules", title=f"{name} modules",
+                        mod_title, title=mod_title,
                         term=weeks.term_of())
             saved_modules += 1
 
@@ -768,21 +773,16 @@ def api_extension_sync():
         is_partial = bool(entry.get("partial"))
         assignments = entry.get("assignments") or []
         if assignments:
-            lines = [f"# {name} — 課題一覧", ""]
+            # 一覧ノートは「ぱっと見て分かる表」にする。説明文はここには
+            # 入れない — 1 件が数百字になることがあり、100 件並ぶと
+            # 一覧として読めなくなるため。説明文は assignments.description
+            # に入っていて、下書きを作るときにそこから読む。
+            rows: list[tuple] = []
             for a in assignments:
                 if not isinstance(a, dict):
                     continue
                 a_name = a.get("name") or "(名称なし)"
-                due = a.get("due_at") or "期限なし"
-                lines.append(f"## {a_name}")
-                lines.append(f"- 期限: {due}")
-                if a.get("points") is not None:
-                    lines.append(f"- 配点: {a['points']}")
                 desc = (a.get("description") or "").strip()
-                if desc:
-                    lines.append("")
-                    lines.append(desc)
-                lines.append("")
 
                 # 課題そのものも 1 件ずつ表に入れる(「今週の課題」の材料)。
                 # 週番号は Canvas の書き方(名前の "Week 3")を最優先し、
@@ -804,23 +804,96 @@ def api_extension_sync():
                     canvas_updated_at=a.get("updated_at") or None,
                     rubric=(a.get("rubric") or "").strip()[:4000] or None)
                 saved_assignment_rows += 1
+                rows.append((weeks.week_of(a_name, due_at), a_name, due_at,
+                             a.get("points"), _assignment_kind(a_name, desc),
+                             bool((a.get("rubric") or "").strip())))
 
             if not is_partial:
+                # ノートの名前も利用者の言語で。直書きすると英語の画面に
+                # 「課題一覧」と出る(以前 school.py で起きた不具合と同じ)。
+                list_title = f"{name} — {i18n.t_in(user_lang, 'notes.kind_assignments')}"
                 fn = f"{user_id}_{stamp}_assignments_{course_id}.md"
-                (OUTPUT_DIR / fn).write_text("\n".join(lines), encoding="utf-8")
+                (OUTPUT_DIR / fn).write_text(
+                    _assignment_list_markdown(name, rows, user_lang),
+                    encoding="utf-8")
                 db.add_note(user_id, course_id, "assignments", fn,
-                           f"{name} 課題一覧", title=f"{name} 課題一覧",
+                           list_title, title=list_title,
                            term=weeks.term_of())
                 saved_assignments += 1
+
+    # フルクロールは「選んだ学期の科目はこれで全部」という意味なので、
+    # そこに出てこなかった科目は前の学期のもの。学期を絞る前に取り込んで
+    # しまったぶんをここで片付ける(中身のあるものは残る)。
+    pruned: list[dict] = []
+    if payload.get("full") and courses:
+        keep = [(e.get("name") or "").strip()
+                for e in courses if isinstance(e, dict)]
+        pruned = db.prune_synced_courses(user_id, keep)
+        for p in pruned:
+            _remove_output_files(p["files"])
 
     pending = db.list_pending_links(user_id, thin_only=True)
     return {"status": "ok", "courses": len(courses),
             "syllabi": saved_syllabi, "assignments": saved_assignments,
             "modules": saved_modules,
             "assignment_rows": saved_assignment_rows,
+            "pruned": [p["name"] for p in pruned],
             "pending_external_syllabi": [
                 {"url": p["url"], "label": p["label"],
                  "course": p["course_name"]} for p in pending]}
+
+
+def _assignment_list_markdown(course_name: str, rows: list[tuple],
+                              lang: str | None = None) -> str:
+    """課題一覧ノートの中身を作る。**一覧であって、課題の中身ではない。**
+
+    1 行 1 件の表にして、週ごとにまとめる。説明文は入れない — Canvas の
+    説明は 1 件で数百字あることが珍しくなく、100 件並ぶと「一覧」として
+    読めなくなるため。中身が要るときは Canvas の元ページか、下書きを
+    作らせたときの生成物を見る。
+
+    見出しの文字は i18n から取る。ここは拡張機能から呼ばれてセッションが
+    無いので、`t()` ではなく `i18n.t_in(lang, ...)` を使う(lang は
+    プロフィールに保存された言語)。直書きすると英語の画面に日本語の表が
+    出てしまう。
+
+    rows は (週, 名前, 締切, 配点, 種類, ルーブリック有無) の並び。
+    """
+    def tr(key, **kw):
+        return i18n.t_in(lang, key, **kw)
+
+    out = [f"# {course_name}", "",
+           tr("notes.list_summary", count=len(rows)), ""]
+
+    # 週ごと。週が付かなかったものは最後に「週なし」でまとめる。
+    by_week: dict[int, list[tuple]] = {}
+    for r in rows:
+        by_week.setdefault(r[0] or 0, []).append(r)
+
+    header = (f"| {tr('notes.col_assignment')} | {tr('notes.col_due')} "
+              f"| {tr('notes.col_points')} | {tr('notes.col_kind')} |")
+    for week in sorted(by_week):
+        items = sorted(by_week[week], key=lambda r: (r[2] is None, r[2] or ""))
+        out.append("## " + (tr("notes.week_label", n=week) if week
+                            else tr("notes.no_due")))
+        out.append("")
+        out.append(header)
+        out.append("|---|---|---|---|")
+        for _, a_name, due, points, kind, has_rubric in items:
+            label = tr(f"notes.akind_{kind}")
+            if has_rubric:
+                label += " ·📋"          # ルーブリックが付いている印
+            out.append(
+                f"| {_md_cell(a_name)} | {(due or '')[:10] or '—'} "
+                f"| {'' if points is None else points} | {label} |")
+        out.append("")
+
+    return "\n".join(out)
+
+
+def _md_cell(text: str) -> str:
+    """表のセルに入れられる形にする(| と改行を潰す)。"""
+    return " ".join(str(text).split()).replace("|", "/")
 
 
 # 課題の種類を、名前と説明文から見分ける。PDF の指定どおり:
@@ -831,6 +904,10 @@ _QUIZ_WORDS = re.compile(
     r"\b(quiz|exam|midterm|final|test|multiple[\s-]?choice)\b", re.IGNORECASE)
 _ESSAY_WORDS = re.compile(
     r"\b(essay|paper|report|thesis|\d{3,}\s*words?)\b", re.IGNORECASE)
+# 説明文の中を見るとき用。"report" / "paper" は普通の文章にもよく出るので
+# 外してある(名前に入っていれば _ESSAY_WORDS のほうで拾える)。
+_ESSAY_WORDS_BODY = re.compile(
+    r"\b(essay|thesis|\d{3,}\s*words?)\b", re.IGNORECASE)
 _SHORT_WORDS = re.compile(
     r"\b(short\s+(answer|response)|discussion|reflection|reading\s+response|"
     r"annotation|comment)\b", re.IGNORECASE)
@@ -842,12 +919,26 @@ def _assignment_kind(name: str, description: str = "") -> str:
     essay は「あとで自分で計画する」と指定されているので、
     エージェントが自動で書き始めないよう、ここで明示的に分けておく。
     """
-    blob = f"{name} {description or ''}"
-    if _ESSAY_WORDS.search(blob):
+    # **課題名を先に、単独で見る。** 名前と説明文をつないで一度に調べると、
+    # Canvas の長い説明にたまたま出てくる "report" や "paper" のせいで、
+    # 「Week 2: Inverted index quiz」までエッセイ扱いになってしまう。
+    # そうなると下書きの対象から外れて、ボタンが出なくなる。
+    if _ESSAY_WORDS.search(name or ""):
         return "essay"
-    if _QUIZ_WORDS.search(blob):
+    if _QUIZ_WORDS.search(name or ""):
         return "quiz"
-    if _SHORT_WORDS.search(blob):
+    if _SHORT_WORDS.search(name or ""):
+        return "short"
+
+    # 名前で決まらなかったときだけ説明文を見る。ただしエッセイ判定は
+    # 強い言い方(essay / thesis / 「500 words」)に限る。"report" や
+    # "paper" は普通の文章にもよく出るので、ここでは根拠にしない。
+    body = description or ""
+    if _ESSAY_WORDS_BODY.search(body):
+        return "essay"
+    if _QUIZ_WORDS.search(body):
+        return "quiz"
+    if _SHORT_WORDS.search(body):
         return "short"
     return "other"
 

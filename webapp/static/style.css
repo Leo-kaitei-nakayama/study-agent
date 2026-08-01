@@ -386,6 +386,23 @@ a.cell-sub:hover { text-decoration: underline; }
 .doc-body ul { margin: 0 0 12px; padding-left: 22px; }
 .doc-body li { margin-bottom: 4px; }
 .doc-body hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+/* 課題一覧の表。狭い画面でははみ出さずに横スクロールさせる。 */
+.doc-body table {
+  width: 100%; border-collapse: collapse; margin: 0 0 16px; font-size: 13px;
+  display: block; overflow-x: auto;
+}
+.doc-body th, .doc-body td {
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.doc-body th {
+  font-size: 12px; font-weight: 600; color: var(--text-2);
+  white-space: nowrap; border-bottom-width: 2px;
+}
+/* 課題名の列だけ広く取り、締切・配点・種類は詰める */
+.doc-body td:first-child, .doc-body th:first-child { width: 100%; }
+.doc-body td:not(:first-child), .doc-body th:not(:first-child) { white-space: nowrap; }
+.doc-body tbody tr:last-child td { border-bottom: none; }
 .doc-body code {
   background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
   padding: 1px 5px; font-size: 13px;
