@@ -51,13 +51,12 @@
 <p class="empty-centered">{{ t('notes.empty_library') }}</p>
 {% endif %}
 
-{# 削除は選択画面へ。ここから直接は消さない(選ぶ → 確認 → 削除) #}
-{% if counts %}
+{# 削除は選択画面へ。ここから直接は消さない(選ぶ → 確認 → 削除)。
+   その学期にノートが無くても、他の学期には有りうるので常に出す。 #}
 <p class="danger-row">
   <a class="btn btn-sm btn-danger" href="{{ url_for('notes_delete', term=selected_term) }}">
     {{ t('delete.title') }}
   </a>
 </p>
-{% endif %}
 
 {% endblock %}

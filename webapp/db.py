@@ -614,6 +614,26 @@ def list_assignments(user_id: int, term: str | None = None,
         return rows
 
 
+def get_assignments_by_ids(user_id: int, ids: list[int]) -> list:
+    """選ばれた課題を返す(下書きするものをユーザーが選んだとき)。
+
+    他人の課題は user_id の条件で落ちるので、id を直接渡されても漏れない。
+    """
+    if not ids:
+        return []
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT a.*, c.name AS course_name FROM assignments a
+            LEFT JOIN courses c ON c.id = a.course_id
+            WHERE a.user_id=%s AND a.id = ANY(%s)
+            ORDER BY a.due_at ASC NULLS LAST, a.name
+        """, (user_id, list(ids))).fetchall()
+        for r in rows:
+            if r["points"] is not None:
+                r["points"] = float(r["points"])
+        return rows
+
+
 def get_assignment(user_id: int, assignment_id: int):
     with _conn() as c:
         return c.execute("""

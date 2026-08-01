@@ -273,11 +273,24 @@ def assignments_page():
     other_weeks = [{"week": w, "items": items}
                    for w, items in sorted(others.items(), reverse=True)]
 
+    # ?select=1 で「どれを下書きさせるか選ぶ」状態になる。
+    # 下書きボタンを押すとこの状態に入り、チェックした課題だけが対象になる。
     return render_template(
         "assignments.html",
         terms=tabs, selected_term=selected,
         this_week=this_week, week_assignments=current,
-        other_weeks=other_weeks, total=len(all_items))
+        other_weeks=other_weeks, total=len(all_items),
+        select_mode=request.args.get("select") == "1",
+        draftable_count=sum(1 for a in all_items if _is_draftable(a)))
+
+
+def _is_draftable(a) -> bool:
+    """エージェントに下書きさせられる課題か。
+
+    エッセイは「本人が計画する」と指定されているので対象外。
+    すでに下書き済みのものも、押し間違いで作り直さないよう外す。
+    """
+    return a["kind"] != "essay" and a["status"] == "todo"
 
 
 @app.route("/notes/course/<int:course_id>")
@@ -404,7 +417,11 @@ MAX_DRAFTS_PER_RUN = 5
 @app.route("/notes/run-week", methods=["POST"])
 @login_required
 def notes_run_week():
-    """今週の課題の下書きをまとめて作る。
+    """チェックされた課題の下書きを作る。
+
+    課題ページで下書きボタンを押すと選択モードになり、チェックした課題の
+    id がここに送られてくる。id が 1 つも来なかった場合は何もしない
+    (「全部やる」を暗黙に走らせない — 意図しない課金を避けるため)。
 
     PDF の指定どおり:
       - quiz / short は、その週のノートを根拠に下書きする
@@ -417,22 +434,26 @@ def notes_run_week():
         return redirect(url_for("plans"))
 
     term = request.form.get("term", "").strip() or weeks.term_of()
-    week_raw = request.form.get("week", "").strip()
-    week_no = int(week_raw) if week_raw.isdigit() else weeks.week_of()
-
-    pending = [a for a in db.list_assignments(user_id, term=term, week_no=week_no)
-               if a["kind"] != "essay" and a["status"] == "todo"]
+    ids = [int(v) for v in request.form.getlist("assignment_id") if v.isdigit()]
+    pending = [a for a in db.get_assignments_by_ids(user_id, ids) if _is_draftable(a)]
     if not pending:
         flash(t("flash.week_nothing"))
-        return redirect(url_for("assignments_page", term=term))
+        return redirect(url_for("assignments_page", term=term, select=1))
 
-    context = _week_notes_context(user_id, term, week_no)
     routing = _user_routing(user_id)
     done, failed = 0, 0
+    # 週ごとのノートは使い回す(同じ週の課題を続けて処理することが多いため)
+    contexts: dict[tuple, str] = {}
 
     for item in pending[:MAX_DRAFTS_PER_RUN]:
+        item_term = item["term"] or term
+        item_week = item["week_no"] or weeks.week_of()
+        key = (item_term, item_week)
+        if key not in contexts:
+            contexts[key] = _week_notes_context(user_id, item_term, item_week)
         try:
-            _draft_one_assignment(user_id, item, context, routing, term, week_no)
+            _draft_one_assignment(user_id, item, contexts[key], routing,
+                                  item_term, item_week)
             done += 1
         except Exception as e:  # noqa: BLE001 — 1件失敗しても残りは続ける
             app.logger.warning("下書き失敗 %s: %s", item["name"], e)
