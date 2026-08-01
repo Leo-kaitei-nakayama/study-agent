@@ -233,6 +233,48 @@ def init_db():
     remove_placeholder_courses()
 
 
+# 同期で作られるノートの種類。これ以外は学生/エージェントが作ったもの。
+SYNCED_NOTE_KINDS = ("syllabus", "assignments", "modules")
+
+
+def prune_synced_courses(user_id: int, keep_names: list[str]) -> list[dict]:
+    """フルクロールに出てこなかった科目を片付ける。
+
+    フルクロールは「選んだ学期に今ある科目はこれで全部」という意味なので、
+    そこに無い科目は前の学期のもの(Math 2B Winter 2025 など)になる。
+    学期を絞る前に取り込んでしまったぶんは、これで消える。
+
+    **中身のあるものは消さない。** 次のどちらかがあれば残す:
+      - 同期以外のノート(下書き・クイズ回答・スクショの控えなど)
+      - 下書き済みの課題
+
+    戻り値は [{"name": ..., "files": [消したファイル名]}]。実ファイルの
+    削除は呼び出し側(app.py の _remove_output_files)がやる。
+    """
+    keep = {n.strip() for n in keep_names if n and n.strip()}
+    removed: list[dict] = []
+    with _conn() as c:
+        rows = c.execute("SELECT id, name FROM courses WHERE user_id=%s",
+                         (user_id,)).fetchall()
+    for r in rows:
+        if r["name"] in keep:
+            continue
+        with _conn() as c:
+            own = c.execute(
+                "SELECT COUNT(*) AS n FROM notes "
+                "WHERE user_id=%s AND course_id=%s AND kind <> ALL(%s)",
+                (user_id, r["id"], list(SYNCED_NOTE_KINDS))).fetchone()["n"]
+            drafted = c.execute(
+                "SELECT COUNT(*) AS n FROM assignments "
+                "WHERE user_id=%s AND course_id=%s AND status <> 'todo'",
+                (user_id, r["id"])).fetchone()["n"]
+        if own or drafted:
+            continue      # 自分で作ったものが入っているので残す
+        removed.append({"name": r["name"],
+                        "files": delete_course(user_id, r["id"])})
+    return removed
+
+
 def remove_placeholder_courses():
     """「Dashboard」のような、授業ではない科目の行を片付ける。
 

@@ -252,6 +252,11 @@ TRANSLATIONS["en"] = {
     "notes.akind_quiz": "Quiz",
     "assignments.draft_one": "Draft this",
     "assignments.per_row_note": "Use the button on a row to draft that one assignment. Drafts only — nothing is ever submitted for you.",
+    "notes.list_summary": "{count} assignments, earliest due first. Descriptions are left out on purpose — open the assignment in Canvas for the full text.",
+    "notes.col_assignment": "Assignment",
+    "notes.col_due": "Due",
+    "notes.col_points": "Points",
+    "notes.col_kind": "Type",
     "notes.akind_short": "Short response",
     "notes.akind_essay": "Essay",
     "notes.akind_other": "Assignment",
@@ -527,6 +532,11 @@ TRANSLATIONS["ja"] = {
     "notes.akind_quiz": "クイズ",
     "assignments.draft_one": "これを下書き",
     "assignments.per_row_note": "行のボタンを押すと、その課題だけを下書きします。作るのは下書きだけで、提出は行いません。",
+    "notes.list_summary": "{count} 件。締切の早い順。説明文はあえて省いてあります — 中身は Canvas の元ページで。",
+    "notes.col_assignment": "課題",
+    "notes.col_due": "締切",
+    "notes.col_points": "配点",
+    "notes.col_kind": "種類",
     "notes.akind_short": "短答",
     "notes.akind_essay": "エッセイ",
     "notes.akind_other": "課題",
@@ -801,6 +811,11 @@ TRANSLATIONS["zh"] = {
     "notes.akind_quiz": "测验",
     "assignments.draft_one": "起草这一项",
     "assignments.per_row_note": "点击行内的按钮，只为该项作业起草。仅生成草稿，不会替你提交。",
+    "notes.list_summary": "共 {count} 项，按截止日期排序。已有意省略详细说明 — 完整内容请看 Canvas 原页。",
+    "notes.col_assignment": "作业",
+    "notes.col_due": "截止",
+    "notes.col_points": "分值",
+    "notes.col_kind": "类型",
     "notes.akind_short": "简答",
     "notes.akind_essay": "论文",
     "notes.akind_other": "作业",
@@ -1075,6 +1090,11 @@ TRANSLATIONS["ko"] = {
     "notes.akind_quiz": "퀴즈",
     "assignments.draft_one": "이것만 초안",
     "assignments.per_row_note": "각 행의 버튼을 누르면 그 과제만 초안을 만듭니다. 초안만 만들며 대신 제출하지 않습니다.",
+    "notes.list_summary": "총 {count}개, 마감이 빠른 순. 설명은 일부러 뺐습니다 — 전문은 Canvas 원문에서 확인하세요.",
+    "notes.col_assignment": "과제",
+    "notes.col_due": "마감",
+    "notes.col_points": "배점",
+    "notes.col_kind": "종류",
     "notes.akind_short": "단답",
     "notes.akind_essay": "에세이",
     "notes.akind_other": "과제",
@@ -1213,6 +1233,25 @@ def t(key: str, **kwargs) -> str:
             return text.format(**kwargs)
         except (KeyError, IndexError):
             # 置換名が合わなくても落とさない(素の文字列を返す)
+            return text
+    return text
+
+
+def t_in(lang: str | None, key: str, **kwargs) -> str:
+    """言語を明示して変換する。
+
+    `t()` はリクエストの言語を使うが、拡張機能から来る API 呼び出しには
+    セッションが無い。そこで作るファイル(課題一覧ノートなど)は、
+    プロフィールに保存された言語で書く必要があるのでこちらを使う。
+    """
+    code = normalize(lang) or DEFAULT_LANG
+    text = TRANSLATIONS.get(code, {}).get(key)
+    if text is None:
+        text = TRANSLATIONS[DEFAULT_LANG].get(key, key)
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except (KeyError, IndexError):
             return text
     return text
 

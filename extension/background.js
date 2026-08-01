@@ -282,7 +282,9 @@ async function fullCrawl(token) {
       `No active course found in "${selectedTerm}". Pick a different term in the popup.`);
   }
 
-  const payload = { courses: [] };
+  // full: true = 「選んだ学期の科目はこれで全部」。サーバーはこれを見て、
+  // ここに出てこない科目(前の学期のもの)を片付ける。
+  const payload = { courses: [], full: true, term: selectedTerm || "" };
   const courseMap = {};
   const skipped = everything.length - courses.length;
   await progressInit(
@@ -333,11 +335,15 @@ async function fullCrawl(token) {
       failed ? "could not read some data" : parts.join(" · "));
   }
 
-  await apiPost("/api/extension/sync", token, payload);
+  const res = await apiPost("/api/extension/sync", token, payload);
   await chrome.storage.local.set({ courseMap, courseMapSavedAt: Date.now() });
   await progressFinish();
-  return { courses: courses.length,
-           mode: selectedTerm ? `Full crawl — ${selectedTerm}` : "Full crawl — all terms" };
+
+  // 前の学期の科目が片付いたら、そのことも出す(黙って消さない)
+  const dropped = (res && res.pruned) || [];
+  let mode = selectedTerm ? `Full crawl — ${selectedTerm}` : "Full crawl — all terms";
+  if (dropped.length) mode += ` · removed ${dropped.length} course(s) from other terms`;
+  return { courses: courses.length, mode };
 }
 
 // 2回目以降: 記憶済みの科目IDを使い、課題の更新だけを直接確認する。
