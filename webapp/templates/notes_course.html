@@ -1,8 +1,11 @@
 {#
   1 科目ぶんのノート一覧。
 
-  note.kind は DB に英語のまま入っている(notes / draft / quiz / syllabus …)ので、
-  表示するときだけ notes.kind_* のキーに変換する。未知の kind はそのまま出す。
+  表示名は `Week {N}: {課題名}`(weeks.note_title が作り、notes.title に入っている)。
+  古いノートには title が無いので、その場合は source_name をそのまま出す。
+
+  各行に「表示」(ブラウザで中身を読む)と「ダウンロード」の両方を置く。
+  チェックボックスで選んでまとめて削除できる。
 #}
 {% extends "base.html" %}
 {% block title %}{{ course.name if course else t('notes.uncategorized') }} — Study Agent{% endblock %}
@@ -10,30 +13,76 @@
 {% set kind_icons = {"notes": "📝", "draft": "✍️", "quiz": "❓",
                      "syllabus": "📋", "assignments": "📌",
                      "resource": "📎", "practice_answer": "🧩"} %}
+{% set back_url = url_for('notes_course', course_id=course.id, term=selected_term)
+                  if course else url_for('notes_uncategorized', term=selected_term) %}
 
 <div class="intro-hero">
   <h1>{{ course.name if course else t('notes.uncategorized') }}</h1>
-  <p><a href="{{ url_for('notes_library') }}">{{ t('notes.back_to_library') }}</a></p>
+  <p><a href="{{ url_for('notes_library', term=selected_term) }}">{{ t('notes.back_to_library') }}</a></p>
 </div>
+
+{% if terms|length > 1 %}
+<div class="term-tabs">
+  {% for term in terms %}
+  <a class="term-tab {% if term == selected_term %}is-active{% endif %}"
+     href="{{ url_for('notes_course', course_id=course.id, term=term)
+              if course else url_for('notes_uncategorized', term=term) }}">{{ term }}</a>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="card">
   {% if notes %}
+  <form method="post" action="{{ url_for('notes_delete') }}"
+        onsubmit="return confirm({{ t('notes.confirm_delete_selected')|tojson }});">
+    <input type="hidden" name="back" value="{{ back_url }}">
+
+    <div class="list-toolbar">
+      <label class="check-inline">
+        {# 全選択。JS が無効でも個別のチェックは使えるので機能は失われない #}
+        <input type="checkbox" onclick="
+          this.closest('form').querySelectorAll('input[name=note_id]')
+              .forEach(cb => cb.checked = this.checked);">
+        {{ t('notes.select_all') }}
+      </label>
+      <button class="btn btn-sm btn-danger" type="submit">{{ t('notes.delete_selected') }}</button>
+    </div>
+
     {% for n in notes %}
     {# 翻訳が無い kind は t() がキーをそのまま返すので、その場合は生の kind を出す #}
     {% set kind_key = 'notes.kind_' ~ n.kind %}
     {% set kind_label = t(kind_key) %}
     <div class="note-row">
+      <input class="note-check" type="checkbox" name="note_id" value="{{ n.id }}"
+             aria-label="{{ n.title or n.source_name }}">
       <span class="note-kind">
         {{ kind_icons.get(n.kind, '📄') }}
         {{ n.kind if kind_label == kind_key else kind_label }}
       </span>
-      <span class="note-source">{{ n.source_name }}</span>
+      <span class="note-source">
+        <a class="note-title" href="{{ url_for('notes_view', note_id=n.id) }}">
+          {{ n.title or n.source_name }}
+        </a>
+      </span>
       <span class="note-date">{{ n.created_at[:10] }}</span>
-      <a class="btn" href="{{ url_for('notes_download', note_id=n.id) }}">{{ t('common.download') }}</a>
+      <a class="btn btn-sm" href="{{ url_for('notes_view', note_id=n.id) }}">{{ t('notes.view') }}</a>
+      <a class="btn btn-sm" href="{{ url_for('notes_download', note_id=n.id) }}">{{ t('common.download') }}</a>
     </div>
     {% endfor %}
+  </form>
   {% else %}
     <p class="empty-state">{{ t('notes.empty_course') }}</p>
   {% endif %}
 </div>
+
+{% if notes and course %}
+<form method="post" action="{{ url_for('notes_delete_all') }}" class="danger-row"
+      onsubmit="return confirm({{ t('notes.confirm_delete_all', term=selected_term)|tojson }});">
+  <input type="hidden" name="course_id" value="{{ course.id }}">
+  <input type="hidden" name="term" value="{{ selected_term }}">
+  <input type="hidden" name="back" value="{{ back_url }}">
+  <button class="btn btn-sm btn-danger" type="submit">{{ t('notes.delete_all') }}</button>
+</form>
+{% endif %}
+
 {% endblock %}

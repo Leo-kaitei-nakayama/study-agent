@@ -1,26 +1,96 @@
-{# 科目ごとのノート一覧(タイル表示)。 #}
+{#
+  ノート一覧(科目ごとのタイル)。
+
+  この画面の構成(上から):
+    1. クォーターのタブ — どの学期のノートを見るか
+    2. 今週の課題 — 今週やることの一覧と、まとめて下書きさせるボタン
+    3. 科目ごとのタイル — 中身は notes_course.html へ
+
+  「今週」の判定は weeks.py。週番号は Canvas の書き方("Week 3")が最優先。
+  下書きボタンは **提出しない**。作るのは下書きまで。
+#}
 {% extends "base.html" %}
 {% block title %}{{ t('notes.title') }} — Study Agent{% endblock %}
 {% block content %}
+
 <div class="intro-hero">
   <h1>{{ t('notes.title') }}</h1>
   <p>{{ t('notes.subtitle') }}</p>
 </div>
 
+{# ------------------------------------------------ クォーターのタブ #}
+{% if terms|length > 1 %}
+<div class="term-tabs">
+  {% for term in terms %}
+  <a class="term-tab {% if term == selected_term %}is-active{% endif %}"
+     href="{{ url_for('notes_library', term=term) }}"
+     {% if term == selected_term %}aria-current="true"{% endif %}>{{ term }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ------------------------------------------------ 今週の課題 #}
+<div class="card">
+  <div class="card-head">
+    <h2 class="card-title">{{ t('notes.this_week') }}</h2>
+    <span class="term-meta">
+      {{ t('notes.this_week_sub', n=this_week, count=week_assignments|length) }}
+    </span>
+  </div>
+
+  {% if week_assignments %}
+  <ul class="assignment-list">
+    {% for a in week_assignments %}
+    <li class="assignment-row">
+      <span class="assignment-kind kind-{{ a.kind }}">{{ t('notes.akind_' ~ a.kind) }}</span>
+      <span class="assignment-main">
+        <span class="assignment-name">{{ a.name }}</span>
+        <span class="assignment-meta">
+          {%- if a.course_name %}{{ a.course_name }} · {% endif -%}
+          {% if a.due_at %}{{ t('notes.due', date=a.due_at[:10]) }}{% else %}{{ t('notes.no_due') }}{% endif %}
+        </span>
+      </span>
+      {% if a.kind == 'essay' %}
+      <span class="assignment-status is-manual">{{ t('notes.essay_manual') }}</span>
+      {% elif a.status == 'drafted' %}
+      <span class="assignment-status is-done">
+        {%- if a.note_id -%}
+        <a href="{{ url_for('notes_view', note_id=a.note_id) }}">{{ t('notes.status_drafted') }}</a>
+        {%- else -%}{{ t('notes.status_drafted') }}{%- endif -%}
+      </span>
+      {% else %}
+      <span class="assignment-status">{{ t('notes.status_todo') }}</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <form method="post" action="{{ url_for('notes_run_week') }}" class="week-actions">
+    <input type="hidden" name="term" value="{{ selected_term }}">
+    <input type="hidden" name="week" value="{{ this_week }}">
+    <button class="btn btn-primary" type="submit">{{ t('notes.run_week') }}</button>
+    <span class="fine-print">{{ t('notes.run_week_note') }}</span>
+  </form>
+  {% else %}
+  <p class="empty-state">{{ t('notes.this_week_empty') }}</p>
+  {% endif %}
+</div>
+
+{# ------------------------------------------------ 科目ごとのタイル #}
 <div class="notes-grid">
   {% for c in courses %}
-  <a class="notes-tile" href="{{ url_for('notes_course', course_id=c.id) }}">
+  <a class="notes-tile" href="{{ url_for('notes_course', course_id=c.id, term=selected_term) }}">
     <div class="notes-tile-icon">📘</div>
     <div class="notes-tile-name">{{ c.name }}</div>
-    <div class="notes-tile-count">{{ t('notes.count', count=counts.get(c.id, 0)) }}</div>
+    <div class="notes-tile-count">{{ t('notes.count_one') if counts.get(c.id, 0) == 1 else t('notes.count', count=counts.get(c.id, 0)) }}</div>
   </a>
   {% endfor %}
 
   {% if uncategorized_count > 0 %}
-  <a class="notes-tile" href="{{ url_for('notes_uncategorized') }}">
+  <a class="notes-tile" href="{{ url_for('notes_uncategorized', term=selected_term) }}">
     <div class="notes-tile-icon">📄</div>
     <div class="notes-tile-name">{{ t('notes.uncategorized') }}</div>
-    <div class="notes-tile-count">{{ t('notes.count', count=uncategorized_count) }}</div>
+    <div class="notes-tile-count">{{ t('notes.count_one') if uncategorized_count == 1 else t('notes.count', count=uncategorized_count) }}</div>
   </a>
   {% endif %}
 </div>
@@ -28,4 +98,15 @@
 {% if not courses and uncategorized_count == 0 %}
 <p class="empty-centered">{{ t('notes.empty_library') }}</p>
 {% endif %}
+
+{# この学期のノートを丸ごと消す。誤操作しにくいよう一覧の下に置く #}
+{% if counts %}
+<form method="post" action="{{ url_for('notes_delete_all') }}" class="danger-row"
+      onsubmit="return confirm({{ t('notes.confirm_delete_all', term=selected_term)|tojson }});">
+  <input type="hidden" name="term" value="{{ selected_term }}">
+  <input type="hidden" name="back" value="{{ url_for('notes_library', term=selected_term) }}">
+  <button class="btn btn-sm btn-danger" type="submit">{{ t('notes.delete_all') }}</button>
+</form>
+{% endif %}
+
 {% endblock %}

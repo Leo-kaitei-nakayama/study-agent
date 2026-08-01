@@ -25,8 +25,10 @@ import db
 import i18n
 import mailer
 import payments
+import preview as preview_render
 import school as school_info
 import transcript as transcript_parser
+import weeks
 from i18n import t
 from plans import DEFAULT_PLAN, PLANS
 from study_agent import llm as study_llm
@@ -214,15 +216,42 @@ def onboarding():
     return render_template("onboarding.html")
 
 
+def _term_tabs(user_id: int) -> tuple[list[str], str]:
+    """ノート一覧に出すクォーターのタブと、いま選ばれているもの。
+
+    ノートが存在するクォーター + 今のクォーターを、新しい順に並べる。
+    選択は ?term= で指定。指定が無ければ今のクォーター(無ければ最新)。
+    """
+    known = set(db.list_note_terms(user_id))
+    current = weeks.term_of()
+    known.add(current)
+    tabs = sorted(known, key=transcript_parser.term_sort_key, reverse=True)
+
+    selected = request.args.get("term", "").strip()
+    if selected not in tabs:
+        selected = current if current in tabs else (tabs[0] if tabs else current)
+    return tabs, selected
+
+
 @app.route("/notes")
 @login_required
 def notes_library():
+    """科目ごとのノート一覧。クォーターのタブで絞り込む。"""
     user_id = session["user_id"]
-    courses = db.list_user_courses(user_id)
-    counts = db.notes_count_by_course(user_id)
-    uncategorized_count = counts.get(None, 0)
-    return render_template("notes_library.html", courses=courses, counts=counts,
-                          uncategorized_count=uncategorized_count)
+    tabs, selected = _term_tabs(user_id)
+    counts = db.notes_count_by_course(user_id, term=selected)
+
+    # 今週の課題(「今週の課題」ボタンの中身)
+    this_week = weeks.week_of()
+    return render_template(
+        "notes_library.html",
+        courses=db.list_user_courses(user_id),
+        counts=counts,
+        uncategorized_count=counts.get(None, 0),
+        terms=tabs, selected_term=selected,
+        this_week=this_week,
+        week_assignments=db.list_assignments(user_id, term=selected,
+                                             week_no=this_week))
 
 
 @app.route("/notes/course/<int:course_id>")
@@ -233,16 +262,38 @@ def notes_course(course_id):
     if not course:
         flash(t("flash.course_missing"))
         return redirect(url_for("notes_library"))
-    notes = db.list_notes_for_course(user_id, course_id)
-    return render_template("notes_course.html", course=course, notes=notes)
+    tabs, selected = _term_tabs(user_id)
+    return render_template("notes_course.html", course=course,
+                          notes=db.list_notes_for_course(user_id, course_id, selected),
+                          terms=tabs, selected_term=selected)
 
 
 @app.route("/notes/uncategorized")
 @login_required
 def notes_uncategorized():
     user_id = session["user_id"]
-    notes = db.list_notes_for_course(user_id, None)
-    return render_template("notes_course.html", course=None, notes=notes)
+    tabs, selected = _term_tabs(user_id)
+    return render_template("notes_course.html", course=None,
+                          notes=db.list_notes_for_course(user_id, None, selected),
+                          terms=tabs, selected_term=selected)
+
+
+@app.route("/notes/view/<int:note_id>")
+@login_required
+def notes_view(note_id):
+    """ダウンロードせずに中身を読む画面。
+
+    .docx はテキストを取り出し、.md は軽く整形して HTML にする(preview.py)。
+    """
+    user_id = session["user_id"]
+    row = db.get_note(user_id, note_id)
+    if not row:
+        flash(t("flash.note_missing"))
+        return redirect(url_for("notes_library"))
+
+    course = db.get_course(user_id, row["course_id"]) if row["course_id"] else None
+    return render_template("note_view.html", note=row, course=course,
+                          rendered=preview_render.render(OUTPUT_DIR / row["filename"]))
 
 
 @app.route("/notes/download/<int:note_id>")
@@ -253,8 +304,177 @@ def notes_download(note_id):
     if not row:
         flash(t("flash.note_missing"))
         return redirect(url_for("notes_library"))
+    # ダウンロード名は `Week 3: HW2.docx` のように、画面上の表示名に合わせる
+    stem = row["title"] or row["source_name"]
+    suffix = Path(row["filename"]).suffix
+    safe = re.sub(r'[\\/:*?"<>|]+', "-", stem).strip() or "note"
     return send_file(OUTPUT_DIR / row["filename"], as_attachment=True,
-                     download_name=row["source_name"])
+                     download_name=f"{safe}{suffix}")
+
+
+@app.route("/notes/delete", methods=["POST"])
+@login_required
+def notes_delete():
+    """選んだノートを削除する。チェックが無ければ何もしない。"""
+    user_id = session["user_id"]
+    ids = [int(v) for v in request.form.getlist("note_id") if v.isdigit()]
+    removed = db.delete_notes(user_id, ids)
+    _remove_output_files(removed)
+    flash(t("flash.notes_deleted", count=len(removed)) if removed
+          else t("flash.nothing_selected"))
+    return redirect(request.form.get("back") or url_for("notes_library"))
+
+
+@app.route("/notes/delete-all", methods=["POST"])
+@login_required
+def notes_delete_all():
+    """表示中のクォーター(と科目)のノートをまとめて削除する。"""
+    user_id = session["user_id"]
+    course_raw = request.form.get("course_id", "").strip()
+    course_id = int(course_raw) if course_raw.isdigit() else None
+    term = request.form.get("term", "").strip() or None
+
+    removed = db.delete_all_notes(user_id, course_id=course_id, term=term)
+    _remove_output_files(removed)
+    flash(t("flash.notes_deleted", count=len(removed)) if removed
+          else t("flash.nothing_selected"))
+    return redirect(request.form.get("back") or url_for("notes_library"))
+
+
+#: 1 回のボタン操作で下書きする上限。押しっぱなしで際限なく課金されないための歯止め。
+MAX_DRAFTS_PER_RUN = 5
+
+
+@app.route("/notes/run-week", methods=["POST"])
+@login_required
+def notes_run_week():
+    """今週の課題の下書きをまとめて作る。
+
+    PDF の指定どおり:
+      - quiz / short は、その週のノートを根拠に下書きする
+      - **essay は扱わない**(本人が計画すると指定されているため)
+      - **提出は一切しない。** できるのは下書きまでで、出すかどうかは本人が決める
+    """
+    user_id = session["user_id"]
+    if not db.has_credit(user_id):
+        flash(t("flash.no_credit"))
+        return redirect(url_for("plans"))
+
+    term = request.form.get("term", "").strip() or weeks.term_of()
+    week_raw = request.form.get("week", "").strip()
+    week_no = int(week_raw) if week_raw.isdigit() else weeks.week_of()
+
+    pending = [a for a in db.list_assignments(user_id, term=term, week_no=week_no)
+               if a["kind"] != "essay" and a["status"] == "todo"]
+    if not pending:
+        flash(t("flash.week_nothing"))
+        return redirect(url_for("notes_library", term=term))
+
+    context = _week_notes_context(user_id, term, week_no)
+    routing = _user_routing(user_id)
+    done, failed = 0, 0
+
+    for item in pending[:MAX_DRAFTS_PER_RUN]:
+        try:
+            _draft_one_assignment(user_id, item, context, routing, term, week_no)
+            done += 1
+        except Exception as e:  # noqa: BLE001 — 1件失敗しても残りは続ける
+            app.logger.warning("下書き失敗 %s: %s", item["name"], e)
+            failed += 1
+        if not db.has_credit(user_id):
+            break   # 途中で残高が尽きたらそこで止める
+
+    flash(t("flash.week_drafted", count=done) if done else t("flash.week_failed"))
+    if failed:
+        flash(t("flash.week_partial", count=failed))
+    return redirect(url_for("notes_library", term=term))
+
+
+def _week_notes_context(user_id: int, term: str, week_no: int,
+                        limit_chars: int = 12000) -> str:
+    """その週のノートを 1 つの文字列にまとめる(下書きの根拠にする)。
+
+    クイズはその日のノートを根拠に答える、という設計なので、ここで集めた
+    ものだけを「ノート由来」の材料として渡す。
+    """
+    chunks: list[str] = []
+    for note in db.list_notes_for_course(user_id, None, term):
+        chunks.append(note)
+    # 科目つきのノートも含める
+    for course in db.list_user_courses(user_id):
+        for note in db.list_notes_for_course(user_id, course["id"], term):
+            chunks.append(note)
+
+    texts: list[str] = []
+    total = 0
+    for note in chunks:
+        if note["week_no"] not in (None, week_no):
+            continue
+        if note["kind"] not in ("notes", "resource", "syllabus"):
+            continue
+        try:
+            body, _ = preview_render.load_text(OUTPUT_DIR / note["filename"])
+        except Exception:  # noqa: BLE001 — 読めないノートは黙って飛ばす
+            continue
+        piece = f"--- {note['title'] or note['source_name']} ---\n{body}"
+        texts.append(piece)
+        total += len(piece)
+        if total >= limit_chars:
+            break
+    return "\n\n".join(texts)[:limit_chars]
+
+
+def _draft_one_assignment(user_id: int, item, context: str, routing: dict,
+                          term: str, week_no: int):
+    """課題 1 件の下書きを作って保存し、状態を drafted にする。"""
+    system = (
+        "You are a study tutor helping a university student prepare a DRAFT "
+        "answer for a practice assignment. Ground your answer in the student's "
+        "own notes when they cover the question, and mark anything that goes "
+        "beyond the notes so the student can verify it. Never claim the work is "
+        "finished or submitted — this is a draft the student will review, edit "
+        "and submit themselves. "
+        f"Write the whole answer in {i18n.ai_output_lang()}.")
+
+    parts = [f"# Assignment: {item['name']}"]
+    if item.get("course_name"):
+        parts.append(f"Course: {item['course_name']}")
+    if item.get("due_at"):
+        parts.append(f"Due: {item['due_at']}")
+    if item.get("description"):
+        parts.append(f"\nInstructions:\n{item['description']}")
+    parts.append(f"\nThis week's notes:\n{context or '(no notes for this week yet)'}")
+
+    answer = study_llm.complete(
+        system, "\n".join(parts), max_tokens=4000, api_keys=MASTER_KEYS,
+        usage_callback=_make_usage_callback(user_id, "week_draft"),
+        routing=routing)
+
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    safe = re.sub(r"[^A-Za-z0-9_\-]+", "_", item["name"])[:40] or "assignment"
+    filename = f"{user_id}_{stamp}_draft_{safe}.md"
+    banner = ("> **DRAFT — not submitted.** Review and edit before you hand this in.\n\n")
+    (OUTPUT_DIR / filename).write_text(
+        f"# {item['name']}\n\n{banner}{answer}\n", encoding="utf-8")
+
+    note_id = db.add_note(user_id, item["course_id"], "draft", filename,
+                          item["name"],
+                          title=weeks.note_title(item["name"], week=week_no),
+                          week_no=week_no, term=term)
+    db.set_assignment_status(user_id, item["id"], "drafted", note_id)
+
+
+def _remove_output_files(filenames: list[str]):
+    """DB から消したノートの実ファイルも片付ける。
+
+    消えていても構わないので、失敗しても例外にしない
+    (DB 上は既に消えているため、画面の整合性は保たれている)。
+    """
+    for name in filenames:
+        try:
+            (OUTPUT_DIR / name).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # ------------------------------------------------------------ extension
@@ -299,7 +519,8 @@ def api_extension_syllabus():
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     filename = f"{user_id}_{stamp}_syllabus_{course_name}.md".replace(" ", "_")
     (OUTPUT_DIR / filename).write_text(text, encoding="utf-8")
-    db.add_note(user_id, course_id, "syllabus", filename, f"{course_name} syllabus")
+    db.add_note(user_id, course_id, "syllabus", filename, f"{course_name} syllabus",
+                title=f"{course_name} syllabus", term=weeks.term_of())
     return {"status": "ok"}
 
 
@@ -340,6 +561,7 @@ def api_extension_sync():
 
     saved_syllabi = 0
     saved_assignments = 0
+    saved_assignment_rows = 0
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     for entry in courses:
@@ -365,7 +587,8 @@ def api_extension_sync():
         if syllabus:
             fn = f"{user_id}_{stamp}_syllabus_{course_id}.md"
             (OUTPUT_DIR / fn).write_text(syllabus, encoding="utf-8")
-            db.add_note(user_id, course_id, "syllabus", fn, f"{name} syllabus")
+            db.add_note(user_id, course_id, "syllabus", fn, f"{name} syllabus",
+                        title=f"{name} syllabus", term=weeks.term_of())
             saved_syllabi += 1
 
         assignments = entry.get("assignments") or []
@@ -374,8 +597,9 @@ def api_extension_sync():
             for a in assignments:
                 if not isinstance(a, dict):
                     continue
+                a_name = a.get("name") or "(名称なし)"
                 due = a.get("due_at") or "期限なし"
-                lines.append(f"## {a.get('name', '(名称なし)')}")
+                lines.append(f"## {a_name}")
                 lines.append(f"- 期限: {due}")
                 if a.get("points") is not None:
                     lines.append(f"- 配点: {a['points']}")
@@ -384,18 +608,63 @@ def api_extension_sync():
                     lines.append("")
                     lines.append(desc)
                 lines.append("")
+
+                # 課題そのものも 1 件ずつ表に入れる(「今週の課題」の材料)。
+                # 週番号は Canvas の書き方(名前の "Week 3")を最優先し、
+                # 無ければ締切日から求める(weeks.py)。
+                due_at = a.get("due_at") or None
+                db.upsert_assignment(
+                    user_id, course_id, a_name, due_at=due_at,
+                    points=a.get("points"), url=a.get("url"),
+                    description=desc[:4000] or None,
+                    week_no=weeks.week_of(a_name, due_at),
+                    term=weeks.term_of(due_at),
+                    kind=_assignment_kind(a_name, desc))
+                saved_assignment_rows += 1
+
             fn = f"{user_id}_{stamp}_assignments_{course_id}.md"
             (OUTPUT_DIR / fn).write_text("\n".join(lines), encoding="utf-8")
             db.add_note(user_id, course_id, "assignments", fn,
-                       f"{name} 課題一覧")
+                       f"{name} 課題一覧", title=f"{name} 課題一覧",
+                       term=weeks.term_of())
             saved_assignments += 1
 
     pending = db.list_pending_links(user_id, thin_only=True)
     return {"status": "ok", "courses": len(courses),
             "syllabi": saved_syllabi, "assignments": saved_assignments,
+            "assignment_rows": saved_assignment_rows,
             "pending_external_syllabi": [
                 {"url": p["url"], "label": p["label"],
                  "course": p["course_name"]} for p in pending]}
+
+
+# 課題の種類を、名前と説明文から見分ける。PDF の指定どおり:
+#   quiz  … 画像で送られてくる選択式 → ノートを根拠に答える
+#   short … 短い記述 → その週のノートから下書きを作る
+#   essay … 長文エッセイ → **今は扱わない**(本人が書く)
+_QUIZ_WORDS = re.compile(
+    r"\b(quiz|exam|midterm|final|test|multiple[\s-]?choice)\b", re.IGNORECASE)
+_ESSAY_WORDS = re.compile(
+    r"\b(essay|paper|report|thesis|\d{3,}\s*words?)\b", re.IGNORECASE)
+_SHORT_WORDS = re.compile(
+    r"\b(short\s+(answer|response)|discussion|reflection|reading\s+response|"
+    r"annotation|comment)\b", re.IGNORECASE)
+
+
+def _assignment_kind(name: str, description: str = "") -> str:
+    """課題の種類を判定する。判断がつかないものは 'other'。
+
+    essay は「あとで自分で計画する」と指定されているので、
+    エージェントが自動で書き始めないよう、ここで明示的に分けておく。
+    """
+    blob = f"{name} {description or ''}"
+    if _ESSAY_WORDS.search(blob):
+        return "essay"
+    if _QUIZ_WORDS.search(blob):
+        return "quiz"
+    if _SHORT_WORDS.search(blob):
+        return "short"
+    return "other"
 
 
 @app.route("/api/extension/links", methods=["POST"])
@@ -455,7 +724,8 @@ def api_extension_capture():
     fn = f"{user_id}_{stamp}_{kind}_{safe}.md"
     body = f"# {title}\n\n出典: {url}\n\n---\n\n{text}"
     (OUTPUT_DIR / fn).write_text(body, encoding="utf-8")
-    db.add_note(user_id, course_id, kind, fn, title)
+    db.add_note(user_id, course_id, kind, fn, title,
+                title=title, term=weeks.term_of())
     resolved = db.mark_link_captured(user_id, url) if url else False
 
     return {"status": "ok", "chars": len(text), "title": title,
@@ -495,7 +765,9 @@ def api_extension_answer():
         course_id = db.add_course(user_id, course_name)
         db.add_note(user_id, course_id, "practice_answer",
                    f"_inline_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.md",
-                   question_text[:60])
+                   question_text[:60],
+                   title=weeks.note_title(question_text[:60]),
+                   week_no=weeks.week_of(), term=weeks.term_of())
     return {"answer": answer}
 
 
@@ -806,7 +1078,11 @@ def _run_task(kind: str):
         flash(t("flash.error", message=e))
         return redirect(url_for("dashboard"))
 
-    db.add_note(user_id, course_id, kind, out_filename, f.filename)
+    # 表示名は `Week {N}: {課題名}`。週は Canvas の表記が最優先(weeks.py)
+    week_no = weeks.week_of(f.filename)
+    db.add_note(user_id, course_id, kind, out_filename, f.filename,
+                title=weeks.note_title(f.filename, week=week_no),
+                week_no=week_no, term=weeks.term_of())
     return send_file(out, as_attachment=True)
 
 

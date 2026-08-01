@@ -53,7 +53,7 @@
     {% for c in courses %}
     <a class="course-card" href="{{ url_for('notes_course', course_id=c.id) }}">
       <span class="course-name">{{ c.name }}</span>
-      <span class="course-count">{{ t('notes.count', count=counts.get(c.id, 0)) }}</span>
+      <span class="course-count">{{ t('notes.count_one') if counts.get(c.id, 0) == 1 else t('notes.count', count=counts.get(c.id, 0)) }}</span>
     </a>
     {% endfor %}
   </div>

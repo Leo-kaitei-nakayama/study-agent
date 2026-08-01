@@ -110,6 +110,31 @@ def init_db():
             source_name TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+        -- 表示名 `Week {N}: {課題名}` と、その内訳。
+        -- week/term は絞り込み(クォーター別タブ・今週の課題)に使うので列に持つ。
+        ALTER TABLE notes ADD COLUMN IF NOT EXISTS title TEXT;
+        ALTER TABLE notes ADD COLUMN IF NOT EXISTS week_no INTEGER;
+        ALTER TABLE notes ADD COLUMN IF NOT EXISTS term TEXT;
+        -- Canvas から取り込んだ課題。締切と「今週やること」の判定に使う。
+        -- 同じ課題を毎回の同期で重複させないよう (user, course, name) で一意。
+        CREATE TABLE IF NOT EXISTS assignments (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            course_id INTEGER REFERENCES courses(id),
+            name TEXT NOT NULL,
+            due_at TEXT,
+            points NUMERIC(7, 2),
+            url TEXT,
+            description TEXT,
+            week_no INTEGER,
+            term TEXT,
+            kind TEXT NOT NULL DEFAULT 'other',
+            status TEXT NOT NULL DEFAULT 'todo',
+            note_id INTEGER REFERENCES notes(id),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (user_id, course_id, name)
+        );
         CREATE TABLE IF NOT EXISTS canvas_accounts (
             user_id INTEGER PRIMARY KEY REFERENCES users(id),
             base_url TEXT NOT NULL,
@@ -186,6 +211,8 @@ def init_db():
             source TEXT NOT NULL DEFAULT 'upload'
         );
         """)
+    # 後から足した列(term など)を既存行にも埋める
+    backfill_note_terms()
 
 
 # ---------------------------------------------------------------- users
@@ -239,6 +266,29 @@ def check_code(user_id: int, purpose: str, code: str) -> bool:
 
 
 # ------------------------------------------------------------ subscriptions
+def backfill_note_terms():
+    """term / week_no / title が空のノートを、作成日から埋める。
+
+    これらの列は後から足したので、既存のノートは NULL のまま。放っておくと
+    クォーター別タブの絞り込みに引っかからず画面から消えてしまうため、
+    起動時に一度だけ埋める(既に入っている行は触らない)。
+    """
+    import weeks
+
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, source_name, created_at FROM notes WHERE term IS NULL"
+        ).fetchall()
+        for r in rows:
+            wk = weeks.week_of(r["source_name"], r["created_at"])
+            c.execute(
+                "UPDATE notes SET term=%s, week_no=COALESCE(week_no, %s), "
+                "title=COALESCE(title, %s) WHERE id=%s",
+                (weeks.term_of(r["created_at"]), wk,
+                 weeks.note_title(r["source_name"], r["created_at"], wk), r["id"]))
+        return len(rows)
+
+
 def _fresh_allowance(plan: str) -> dict:
     """旧トークン方式の付与量。クレジット方式に移行したので常に 0。
 
@@ -385,39 +435,178 @@ def get_course(user_id: int, course_id: int):
 
 # ------------------------------------------------------------------ notes
 def add_note(user_id: int, course_id: int | None, kind: str, filename: str,
-             source_name: str):
+             source_name: str, title: str | None = None,
+             week_no: int | None = None, term: str | None = None) -> int:
+    """ノートを 1 件記録して id を返す。
+
+    title は `Week {N}: {課題名}` の形の表示名(weeks.note_title が作る)。
+    week_no / term はクォーター別タブと「今週」の絞り込みに使う。
+    """
     with _conn() as c:
-        c.execute("""INSERT INTO notes
-                     (user_id, course_id, kind, filename, source_name, created_at)
-                     VALUES (%s, %s, %s, %s, %s, %s)""",
+        row = c.execute("""INSERT INTO notes
+                     (user_id, course_id, kind, filename, source_name,
+                      title, week_no, term, created_at)
+                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     RETURNING id""",
                   (user_id, course_id, kind, filename, source_name,
-                   datetime.utcnow().isoformat()))
+                   title, week_no, term, datetime.utcnow().isoformat())).fetchone()
+        return row["id"]
 
 
-def notes_count_by_course(user_id: int) -> dict:
-    """course_id -> ノート件数(未分類はNoneキー)。"""
+def notes_count_by_course(user_id: int, term: str | None = None) -> dict:
+    """course_id -> ノート件数(未分類はNoneキー)。term を渡すとその学期だけ。"""
     with _conn() as c:
-        rows = c.execute(
-            "SELECT course_id, COUNT(*) AS n FROM notes WHERE user_id=%s "
-            "GROUP BY course_id", (user_id,)).fetchall()
+        if term:
+            rows = c.execute(
+                "SELECT course_id, COUNT(*) AS n FROM notes "
+                "WHERE user_id=%s AND term=%s GROUP BY course_id",
+                (user_id, term)).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT course_id, COUNT(*) AS n FROM notes WHERE user_id=%s "
+                "GROUP BY course_id", (user_id,)).fetchall()
         return {r["course_id"]: r["n"] for r in rows}
 
 
-def list_notes_for_course(user_id: int, course_id: int | None) -> list:
+def list_note_terms(user_id: int) -> list[str]:
+    """ノートが存在する学期の一覧(タブに出す)。term 未設定のものは除く。"""
     with _conn() as c:
-        if course_id is None:
-            return c.execute(
-                "SELECT * FROM notes WHERE user_id=%s AND course_id IS NULL "
-                "ORDER BY created_at DESC", (user_id,)).fetchall()
+        rows = c.execute(
+            "SELECT DISTINCT term FROM notes WHERE user_id=%s AND term IS NOT NULL",
+            (user_id,)).fetchall()
+        return [r["term"] for r in rows]
+
+
+def list_notes_for_course(user_id: int, course_id: int | None,
+                          term: str | None = None) -> list:
+    """1 科目のノート一覧。週の新しい順 → 作成の新しい順。"""
+    where = ["user_id=%s"]
+    params: list = [user_id]
+    if course_id is None:
+        where.append("course_id IS NULL")
+    else:
+        where.append("course_id=%s")
+        params.append(course_id)
+    if term:
+        where.append("term=%s")
+        params.append(term)
+    with _conn() as c:
         return c.execute(
-            "SELECT * FROM notes WHERE user_id=%s AND course_id=%s "
-            "ORDER BY created_at DESC", (user_id, course_id)).fetchall()
+            f"SELECT * FROM notes WHERE {' AND '.join(where)} "
+            "ORDER BY week_no DESC NULLS LAST, created_at DESC",
+            tuple(params)).fetchall()
 
 
 def get_note(user_id: int, note_id: int):
     with _conn() as c:
         return c.execute("SELECT * FROM notes WHERE id=%s AND user_id=%s",
                          (note_id, user_id)).fetchone()
+
+
+def delete_notes(user_id: int, note_ids: list[int]) -> list[str]:
+    """選んだノートを削除し、消したファイル名を返す(実ファイルの削除は呼び出し側)。"""
+    if not note_ids:
+        return []
+    with _conn() as c:
+        rows = c.execute(
+            "DELETE FROM notes WHERE user_id=%s AND id = ANY(%s) RETURNING filename",
+            (user_id, list(note_ids))).fetchall()
+        return [r["filename"] for r in rows]
+
+
+def delete_all_notes(user_id: int, course_id: int | None = None,
+                     term: str | None = None) -> list[str]:
+    """まとめて削除。course_id / term を渡すとその範囲だけ。
+
+    course_id を渡さない場合は「未分類も含めた全部」が対象になる。
+    """
+    where = ["user_id=%s"]
+    params: list = [user_id]
+    if course_id is not None:
+        where.append("course_id=%s")
+        params.append(course_id)
+    if term:
+        where.append("term=%s")
+        params.append(term)
+    with _conn() as c:
+        rows = c.execute(
+            f"DELETE FROM notes WHERE {' AND '.join(where)} RETURNING filename",
+            tuple(params)).fetchall()
+        return [r["filename"] for r in rows]
+
+
+# ------------------------------------------------------------- assignments
+def upsert_assignment(user_id: int, course_id: int | None, name: str,
+                      due_at: str | None = None, points=None, url: str | None = None,
+                      description: str | None = None, week_no: int | None = None,
+                      term: str | None = None, kind: str = "other") -> int:
+    """Canvas から取り込んだ課題を 1 件登録(同じ名前があれば更新)。
+
+    status と note_id は上書きしない。エージェントが下書きを作った実績を
+    同期のたびに消してしまわないため。
+    """
+    now = datetime.utcnow().isoformat()
+    with _conn() as c:
+        row = c.execute("""
+            INSERT INTO assignments (user_id, course_id, name, due_at, points, url,
+                                     description, week_no, term, kind,
+                                     created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, course_id, name) DO UPDATE SET
+                due_at=EXCLUDED.due_at, points=EXCLUDED.points, url=EXCLUDED.url,
+                description=EXCLUDED.description, week_no=EXCLUDED.week_no,
+                term=EXCLUDED.term, kind=EXCLUDED.kind, updated_at=EXCLUDED.updated_at
+            RETURNING id
+        """, (user_id, course_id, name, due_at, points, url, description,
+              week_no, term, kind, now, now)).fetchone()
+        return row["id"]
+
+
+def list_assignments(user_id: int, term: str | None = None,
+                     week_no: int | None = None, course_id: int | None = None) -> list:
+    """課題一覧。締切の早い順(締切なしは最後)。"""
+    where = ["a.user_id=%s"]
+    params: list = [user_id]
+    for col, val in (("a.term", term), ("a.week_no", week_no),
+                     ("a.course_id", course_id)):
+        if val is not None:
+            where.append(f"{col}=%s")
+            params.append(val)
+    with _conn() as c:
+        rows = c.execute(f"""
+            SELECT a.*, c.name AS course_name FROM assignments a
+            LEFT JOIN courses c ON c.id = a.course_id
+            WHERE {' AND '.join(where)}
+            ORDER BY a.due_at ASC NULLS LAST, a.name
+        """, tuple(params)).fetchall()
+        for r in rows:
+            if r["points"] is not None:
+                r["points"] = float(r["points"])
+        return rows
+
+
+def get_assignment(user_id: int, assignment_id: int):
+    with _conn() as c:
+        return c.execute("""
+            SELECT a.*, c.name AS course_name FROM assignments a
+            LEFT JOIN courses c ON c.id = a.course_id
+            WHERE a.id=%s AND a.user_id=%s""",
+            (assignment_id, user_id)).fetchone()
+
+
+def set_assignment_status(user_id: int, assignment_id: int, status: str,
+                          note_id: int | None = None):
+    """課題の状態を更新する。status は todo / drafted / reviewed。
+
+    **提出は行わない。** drafted は「下書きができた」という意味でしかなく、
+    提出するかどうかは必ず学生が決める。
+    """
+    with _conn() as c:
+        c.execute("""UPDATE assignments SET status=%s, updated_at=%s,
+                     note_id=COALESCE(%s, note_id)
+                     WHERE id=%s AND user_id=%s""",
+                  (status, datetime.utcnow().isoformat(), note_id,
+                   assignment_id, user_id))
 
 
 # --------------------------------------------------------------- canvas

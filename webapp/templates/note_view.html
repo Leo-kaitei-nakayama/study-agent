@@ -1,0 +1,45 @@
+{#
+  ノート 1 件の中身をブラウザで読む画面。
+
+  ダウンロードして Word で開かないと内容が分からない、という状態を無くすため、
+  .docx / .md のどちらも整形して表示する(変換は preview.py)。
+  表示できなかった場合でもダウンロードのボタンは必ず出す。
+
+  rendered.html は preview.py がエスケープ済みの HTML を組み立てたもの。
+  生成物には LLM の出力が入るので、|safe を付けてよいのはこの経路だけ。
+#}
+{% extends "base.html" %}
+{% block title %}{{ note.title or note.source_name }} — Study Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ note.title or note.source_name }}</h1>
+  <p>
+    {%- if course %}
+    <a href="{{ url_for('notes_course', course_id=course.id) }}">{{ t('notes.open_course', course=course.name) }}</a> ·
+    {%- else %}
+    <a href="{{ url_for('notes_library') }}">{{ t('notes.back_to_library') }}</a> ·
+    {%- endif %}
+    {{ t('notes.created', date=note.created_at[:10]) }}
+    {%- if note.week_no %} · {{ t('notes.week_label', n=note.week_no) }}{% endif %}
+  </p>
+</div>
+
+<div class="doc-actions">
+  <a class="btn btn-primary" href="{{ url_for('notes_download', note_id=note.id) }}">
+    {{ t('common.download') }}
+  </a>
+</div>
+
+{% if rendered.error %}
+<div class="warn-banner">{{ t('notes.preview_error') }}</div>
+{% else %}
+  {% if rendered.truncated %}
+  <div class="warn-banner">{{ t('notes.preview_truncated') }}</div>
+  {% endif %}
+  <article class="card doc-body">
+    {{ rendered.html|safe }}
+  </article>
+{% endif %}
+
+{% endblock %}
