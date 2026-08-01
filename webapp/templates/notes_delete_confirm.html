@@ -1,0 +1,41 @@
+{#
+  削除の最終確認(削除の 2 段階目)。
+
+  何が消えるかを実際に並べて見せ、押して初めて消える。
+  ここまで来ても、まだ 1 件も消えていない。
+#}
+{% extends "base.html" %}
+{% block title %}{{ t('delete.confirm_title') }} — Study Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ t('delete.confirm_title') }}</h1>
+</div>
+
+<div class="warn-banner">{{ t('delete.confirm_body', count=notes|length) }}</div>
+
+<div class="card">
+  {% for n in notes %}
+  <div class="note-row">
+    <span class="note-source">
+      <span class="note-title">{{ n.title or n.source_name }}</span>
+      <span class="note-meta">{{ n.course_name or t('notes.uncategorized') }}</span>
+    </span>
+    <span class="note-date">{{ n.created_at[:10] }}</span>
+  </div>
+  {% endfor %}
+</div>
+
+<form method="post" action="{{ url_for('notes_delete_apply') }}" class="form-actions">
+  <input type="hidden" name="term" value="{{ term or '' }}">
+  <input type="hidden" name="scope" value="{{ scope }}">
+  {% if scope != 'all' %}
+    {% for n in notes %}<input type="hidden" name="note_id" value="{{ n.id }}">{% endfor %}
+  {% endif %}
+  <a class="btn" href="{{ url_for('notes_delete', term=term) }}">{{ t('delete.cancel') }}</a>
+  <button class="btn btn-danger" type="submit">
+    {{ t('delete.confirm_btn', count=notes|length) }}
+  </button>
+</form>
+
+{% endblock %}

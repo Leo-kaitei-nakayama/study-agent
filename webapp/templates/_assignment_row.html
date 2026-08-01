@@ -1,0 +1,25 @@
+{#
+  課題 1 行。assignments.html から include して使う(今週ぶんと他の週で共用)。
+  変数 a に課題の行が入っている前提。
+#}
+<li class="assignment-row">
+  <span class="assignment-kind kind-{{ a.kind }}">{{ t('notes.akind_' ~ a.kind) }}</span>
+  <span class="assignment-main">
+    <span class="assignment-name">{{ a.name }}</span>
+    <span class="assignment-meta">
+      {%- if a.course_name %}{{ a.course_name }} · {% endif -%}
+      {% if a.due_at %}{{ t('notes.due', date=a.due_at[:10]) }}{% else %}{{ t('notes.no_due') }}{% endif %}
+    </span>
+  </span>
+  {% if a.kind == 'essay' %}
+  <span class="assignment-status is-manual">{{ t('notes.essay_manual') }}</span>
+  {% elif a.status == 'drafted' %}
+  <span class="assignment-status is-done">
+    {%- if a.note_id -%}
+    <a href="{{ url_for('notes_view', note_id=a.note_id) }}">{{ t('notes.status_drafted') }}</a>
+    {%- else -%}{{ t('notes.status_drafted') }}{%- endif -%}
+  </span>
+  {% else %}
+  <span class="assignment-status">{{ t('notes.status_todo') }}</span>
+  {% endif %}
+</li>

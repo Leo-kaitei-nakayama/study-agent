@@ -503,6 +503,35 @@ def get_note(user_id: int, note_id: int):
                          (note_id, user_id)).fetchone()
 
 
+def list_notes_for_term(user_id: int, term: str | None = None) -> list:
+    """その学期のノートを科目名つきで全部返す(削除の選択画面に出す)。"""
+    where = ["n.user_id=%s"]
+    params: list = [user_id]
+    if term:
+        where.append("n.term=%s")
+        params.append(term)
+    with _conn() as c:
+        return c.execute(f"""
+            SELECT n.*, c.name AS course_name FROM notes n
+            LEFT JOIN courses c ON c.id = n.course_id
+            WHERE {' AND '.join(where)}
+            ORDER BY c.name NULLS FIRST, n.week_no DESC NULLS LAST, n.created_at DESC
+        """, tuple(params)).fetchall()
+
+
+def get_notes_by_ids(user_id: int, note_ids: list[int]) -> list:
+    """選ばれた id のノートを返す(確認画面に「何を消すか」を出すため)。"""
+    if not note_ids:
+        return []
+    with _conn() as c:
+        return c.execute("""
+            SELECT n.*, c.name AS course_name FROM notes n
+            LEFT JOIN courses c ON c.id = n.course_id
+            WHERE n.user_id=%s AND n.id = ANY(%s)
+            ORDER BY c.name NULLS FIRST, n.created_at DESC
+        """, (user_id, list(note_ids))).fetchall()
+
+
 def delete_notes(user_id: int, note_ids: list[int]) -> list[str]:
     """選んだノートを削除し、消したファイル名を返す(実ファイルの削除は呼び出し側)。"""
     if not note_ids:
