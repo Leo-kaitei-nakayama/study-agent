@@ -1,0 +1,157 @@
+{#
+  自分で撮ったスクリーンショットについて質問する画面。
+
+  拡張機能の自動キャプチャは Canvas では止めてある(学生が Canvas を操作すると
+  決めたため)。こちらは **撮るのが本人** なので、どのページのものでも渡せる。
+
+  受け取り方は 3 通り。どれもブラウザの標準機能だけで動く:
+    1. 貼り付け … ⌃⌘⇧4 でクリップボードに撮って ⌘V(いちばん速い)
+    2. ドラッグ … デスクトップの .png をこの枠に落とす
+    3. ファイル選択 … いつもの入力欄
+
+  JS を切っていても 3 は動く(貼り付けとドラッグだけが JS 頼み)。
+  **提出は一切しない。** 出てくるのは説明か下書きまで。
+#}
+{% extends "base.html" %}
+{% block title %}{{ t('ask.title') }} — Study Agent{% endblock %}
+{% block content %}
+
+<div class="intro-hero">
+  <h1>{{ t('ask.title') }}</h1>
+  <p>{{ t('ask.subtitle') }}</p>
+</div>
+
+<form class="card" method="post" enctype="multipart/form-data" id="ask-form">
+  {# ---------------------------------------------- 画像の受け取り #}
+  <div class="drop-zone" id="drop">
+    <div class="drop-hint" id="drop-hint">
+      <div class="drop-icon">📋</div>
+      <p class="drop-lead">{{ t('ask.paste_here') }}</p>
+      <p class="fine-print">{{ t('ask.paste_help') }}</p>
+    </div>
+    <img id="preview" alt="" hidden>
+  </div>
+  {# 貼り付け / ドラッグしたものはここに data URL で入る #}
+  <input type="hidden" name="pasted" id="pasted">
+
+  <label for="image">{{ t('ask.or_choose') }}</label>
+  <input type="file" name="image" id="image" accept="image/png,image/jpeg,image/webp">
+
+  {# ---------------------------------------------- 何をしてほしいか #}
+  <label>{{ t('ask.what') }}</label>
+  <div class="mode-list">
+    {% for m in modes %}
+    <label class="mode-option">
+      <input type="radio" name="mode" value="{{ m }}"
+             {% if m == mode %}checked{% endif %}>
+      <span>
+        <strong>{{ t('ask.mode_' ~ m) }}</strong>
+        — {{ t('ask.mode_' ~ m ~ '_help') }}
+      </span>
+    </label>
+    {% endfor %}
+  </div>
+
+  <label for="prompt">{{ t('ask.prompt_label') }}</label>
+  <input type="text" name="prompt" id="prompt" value="{{ prompt }}"
+         placeholder="{{ t('ask.prompt_placeholder') }}">
+
+  {% if courses %}
+  <label for="course_id">{{ t('ask.course_label') }}</label>
+  <select name="course_id" id="course_id">
+    <option value="">{{ t('ask.no_course') }}</option>
+    {% for c in courses %}
+    <option value="{{ c.id }}">{{ c.name }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">{{ t('ask.submit') }}</button>
+  </div>
+  <p class="fine-print">{{ t('ask.never_submits') }}</p>
+</form>
+
+{% if result %}
+<div class="card">
+  <h2 class="card-title">{{ t('ask.answer') }}</h2>
+  <div class="doc-body ask-answer">{{ result }}</div>
+  <p class="fine-print">{{ t('ask.saved_as_note') }}</p>
+</div>
+{% endif %}
+
+<script>
+// 貼り付け・ドラッグを受けて、隠しフィールドに data URL を入れるだけ。
+// ファイル選択だけで使うなら JS は無くても動く。
+(function () {
+  const drop    = document.getElementById("drop");
+  const hint    = document.getElementById("drop-hint");
+  const preview = document.getElementById("preview");
+  const hidden  = document.getElementById("pasted");
+  const picker  = document.getElementById("image");
+
+  function show(dataUrl) {
+    hidden.value = dataUrl;
+    preview.src = dataUrl;
+    preview.hidden = false;
+    hint.hidden = true;
+    drop.classList.add("has-image");
+  }
+
+  function readFile(file) {
+    if (!file || !/^image\/(png|jpeg|webp)$/.test(file.type)) return;
+    const r = new FileReader();
+    r.onload = () => show(r.result);
+    r.readAsDataURL(file);
+  }
+
+  // 1. 貼り付け — ページのどこで押しても拾う(枠を選ばせない)
+  document.addEventListener("paste", (e) => {
+    for (const item of (e.clipboardData || {}).items || []) {
+      if (item.type && item.type.startsWith("image/")) {
+        readFile(item.getAsFile());
+        e.preventDefault();
+        return;
+      }
+    }
+  });
+
+  // 2. ドラッグ&ドロップ
+  ["dragenter", "dragover"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault(); drop.classList.add("is-over");
+    }));
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => {
+      e.preventDefault(); drop.classList.remove("is-over");
+    }));
+  drop.addEventListener("drop", (e) => {
+    readFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+
+  // 3. ファイル選択したときも同じ見た目にする
+  picker.addEventListener("change", () => {
+    if (picker.files && picker.files[0]) {
+      hidden.value = "";      // ファイル本体を送るので data URL は要らない
+      const r = new FileReader();
+      r.onload = () => { preview.src = r.result; preview.hidden = false;
+                         hint.hidden = true; drop.classList.add("has-image"); };
+      r.readAsDataURL(picker.files[0]);
+    }
+  });
+
+  // 「その他」を選んだときだけ自由入力を目立たせる
+  const promptRow = document.getElementById("prompt");
+  function syncPrompt() {
+    const other = document.querySelector("input[name=mode]:checked").value === "other";
+    promptRow.closest("form").querySelector("label[for=prompt]").style.opacity =
+      other ? "1" : ".55";
+  }
+  for (const r of document.querySelectorAll("input[name=mode]")) {
+    r.addEventListener("change", syncPrompt);
+  }
+  syncPrompt();
+})();
+</script>
+
+{% endblock %}

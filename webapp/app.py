@@ -8,6 +8,8 @@
   ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY
 学生は課金するだけで、鍵を自分で入力する必要はない。
 """
+import base64
+import binascii
 import os
 import re
 import sys
@@ -1128,7 +1130,25 @@ def api_extension_screenshot():
     mode = payload.get("mode") if payload.get("mode") in SCREENSHOT_MODES else "explanation"
     custom = (payload.get("prompt") or "").strip()
     course_name = (payload.get("course_name") or "").strip()
+    course_id = _extension_course_id(user_id, course_name)
 
+    try:
+        answer = _answer_about_image(user_id, image_b64, media_type, mode,
+                                     custom, course_id, source=page_url)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}, 500
+
+    return {"answer": answer, "mode": mode}
+
+
+def _answer_about_image(user_id: int, image_b64: str, media_type: str,
+                        mode: str, custom: str, course_id, source: str = "") -> str:
+    """画像 1 枚について答え、控えをノートに残す。
+
+    拡張機能が自動で撮ったものと、学生が自分で撮ってアップロードしたものの
+    両方がここを通る。**答え方も保存の仕方も同じにする** ため 1 か所にまとめた。
+    どちらの入口でも提出は行わない。
+    """
     instruction = {
         "explanation": "Explain what this page is asking and how to think about it. "
                        "Do not just give a final answer — show the reasoning.",
@@ -1144,28 +1164,109 @@ def api_extension_screenshot():
         "plainly instead of guessing. "
         f"Write your reply in {i18n.ai_output_lang()}.")
 
-    try:
-        answer = study_llm.complete_vision(
-            system, custom or instruction, image_b64, media_type,
-            api_keys=MASTER_KEYS,
-            usage_callback=_make_usage_callback(user_id, f"screenshot_{mode}"))
-    except Exception as e:  # noqa: BLE001
-        return {"error": str(e)}, 500
+    answer = study_llm.complete_vision(
+        system, custom or instruction, image_b64, media_type,
+        api_keys=MASTER_KEYS,
+        usage_callback=_make_usage_callback(user_id, f"screenshot_{mode}"))
 
     # あとで見返せるようにノートとしても残す
-    course_id = _extension_course_id(user_id, course_name)
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     filename = f"{user_id}_{stamp}_screenshot_{mode}.md"
     (OUTPUT_DIR / filename).write_text(
         f"# {t('ext.screenshot_note_title')} ({mode})\n\n"
-        f"{page_url}\n\n---\n\n{answer}\n", encoding="utf-8")
+        f"{source}\n\n---\n\n{answer}\n", encoding="utf-8")
     week_no = weeks.week_of()
     db.add_note(user_id, course_id, "screenshot", filename,
                 f"screenshot ({mode})",
                 title=weeks.note_title(f"screenshot ({mode})", week=week_no),
                 week_no=week_no, term=weeks.term_of())
+    return answer
 
-    return {"answer": answer, "mode": mode}
+
+# 自分で撮ったスクリーンショットを受け取る上限(バイト)。
+# 4K のスクショで概ね 3-5MB なので、その倍を見ておく。
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+UPLOAD_MEDIA_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+
+
+@app.route("/ask", methods=["GET", "POST"])
+@login_required
+def ask_page():
+    """自分で撮ったスクリーンショットを渡して質問する画面。
+
+    拡張機能の自動キャプチャは Canvas では止めてある(学生が Canvas を
+    操作すると決めたため)。この画面はその代わりで、**撮るのは本人**:
+
+      1. macOS なら ⌃⌘⇧4 でクリップボードにコピー → この欄に ⌘V
+      2. ⌘⇧4 でファイルに保存したものを選ぶ / ドラッグして落とす
+
+    どちらもブラウザの標準機能だけで済む。拡張機能から OS のスクリーン
+    ショット機能を呼ぶことはできない(拡張機能はブラウザの外に出られない)。
+    """
+    user_id = session["user_id"]
+    courses = db.list_user_courses(user_id)
+    result = None
+    mode = request.form.get("mode", "explanation")
+    if mode not in SCREENSHOT_MODES:
+        mode = "explanation"
+    custom = (request.form.get("prompt") or "").strip()
+
+    if request.method == "POST":
+        if not db.has_credit(user_id):
+            flash(t("flash.no_credit"))
+            return redirect(url_for("plans"))
+
+        raw, media_type, err = _read_uploaded_image(request)
+        if err:
+            flash(err)
+        elif mode == "other" and not custom:
+            flash(t("ask.need_prompt"))
+        else:
+            course_raw = request.form.get("course_id", "")
+            course_id = int(course_raw) if course_raw.isdigit() else None
+            try:
+                result = _answer_about_image(
+                    user_id, base64.b64encode(raw).decode(), media_type,
+                    mode, custom, course_id, source=t("ask.source_upload"))
+            except Exception as e:  # noqa: BLE001
+                app.logger.warning("ask failed: %s", e)
+                flash(t("ask.failed"))
+
+    return render_template("ask.html", courses=courses, result=result,
+                           mode=mode, prompt=custom,
+                           modes=SCREENSHOT_MODES)
+
+
+def _read_uploaded_image(req):
+    """アップロードされた画像を (bytes, media_type, エラー文) で返す。
+
+    ファイル選択とクリップボード貼り付けの両方を受ける。貼り付けのほうは
+    JS が data URL にして隠しフィールドに入れてくるので、そこも読む。
+    """
+    f = req.files.get("image")
+    if f and f.filename:
+        raw = f.read(MAX_UPLOAD_BYTES + 1)
+        if len(raw) > MAX_UPLOAD_BYTES:
+            return None, None, t("ask.too_big")
+        media_type = (f.mimetype or "").lower()
+        if media_type not in UPLOAD_MEDIA_TYPES:
+            return None, None, t("ask.bad_type")
+        return raw, media_type, None
+
+    pasted = (req.form.get("pasted") or "").strip()
+    if pasted:
+        m = re.match(r"^data:(image/(?:png|jpeg|webp));base64,(.+)$", pasted, re.S)
+        if not m:
+            return None, None, t("ask.bad_type")
+        try:
+            raw = base64.b64decode(m.group(2), validate=True)
+        except (ValueError, binascii.Error):
+            return None, None, t("ask.bad_type")
+        if len(raw) > MAX_UPLOAD_BYTES:
+            return None, None, t("ask.too_big")
+        return raw, m.group(1), None
+
+    return None, None, t("ask.need_image")
 
 
 @app.route("/api/extension/notifications", methods=["GET"])

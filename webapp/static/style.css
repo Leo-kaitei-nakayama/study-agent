@@ -536,3 +536,28 @@ a.cell-sub:hover { text-decoration: underline; }
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }
 .tile-remove:hover { background: #8a1b1b; }
+
+/* ------------------------------------------------ スクショで質問する画面
+   貼り付け / ドラッグを受ける枠。JS を切っていてもファイル選択は動くので、
+   この枠は「あると速い」だけの飾りに留めてある。 */
+.drop-zone {
+  border: 2px dashed var(--border); border-radius: 12px; background: var(--bg);
+  padding: 28px 20px; text-align: center; margin-bottom: 6px;
+  transition: border-color .15s, background .15s;
+}
+.drop-zone.is-over { border-color: var(--accent); background: var(--accent-bg); }
+.drop-zone.has-image { padding: 12px; border-style: solid; background: var(--surface); }
+.drop-icon { font-size: 26px; line-height: 1; margin-bottom: 8px; }
+.drop-lead { font-size: 14px; font-weight: 600; margin: 0; }
+.drop-zone .fine-print { margin-top: 6px; }
+.drop-zone img { max-width: 100%; border-radius: 8px; display: block; margin: 0 auto; }
+
+.mode-list { display: flex; flex-direction: column; gap: 2px; }
+.mode-option {
+  display: flex; align-items: flex-start; gap: 9px; margin: 0;
+  padding: 7px 0; font-size: 14px; color: var(--text); cursor: pointer;
+}
+.mode-option input { width: auto; margin: 3px 0 0; flex: none; }
+
+/* 返ってきた答え。ノート表示と同じ体裁にそろえる。 */
+.ask-answer { white-space: pre-wrap; }
