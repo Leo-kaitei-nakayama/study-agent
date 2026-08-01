@@ -21,6 +21,7 @@ from flask import (Flask, flash, g, redirect, render_template, request,
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # study_agent パッケージを見える化
 
+import coursemap
 import crypto
 import db
 import i18n
@@ -331,9 +332,18 @@ def notes_course(course_id):
         flash(t("flash.course_missing"))
         return redirect(url_for("notes_library"))
     tabs, selected = _term_tabs(user_id)
+    # 科目の文脈カード: シラバスから読み取った道具と、その学期の課題を
+    # 種類ごとに数えたもの(どの部品が担当するか = coursemap.allocate)。
+    tools = coursemap.tools_from_json(course.get("tools"))
+    duty: dict[str, int] = {}
+    for a in db.list_assignments(user_id, term=selected, course_id=course_id):
+        duty[a["kind"]] = duty.get(a["kind"], 0) + 1
+    allocation = [{"kind": k, "count": n, "agent": coursemap.allocate(k)}
+                  for k, n in sorted(duty.items(), key=lambda kv: -kv[1])]
     return render_template("notes_course.html", course=course,
                           notes=db.list_notes_for_course(user_id, course_id, selected),
-                          terms=tabs, selected_term=selected)
+                          terms=tabs, selected_term=selected,
+                          tools=tools, allocation=allocation)
 
 
 @app.route("/notes/uncategorized")
@@ -341,9 +351,11 @@ def notes_course(course_id):
 def notes_uncategorized():
     user_id = session["user_id"]
     tabs, selected = _term_tabs(user_id)
+    # 「未分類」は科目ではないので、文脈カード(道具・担当)は出さない
     return render_template("notes_course.html", course=None,
                           notes=db.list_notes_for_course(user_id, None, selected),
-                          terms=tabs, selected_term=selected)
+                          terms=tabs, selected_term=selected,
+                          tools=[], allocation=[])
 
 
 @app.route("/notes/view/<int:note_id>")
@@ -646,6 +658,10 @@ def api_extension_state():
             synced.append(c["name"])
     pending = db.list_pending_links(user_id)
     return {"courses": [c["name"] for c in courses], "synced_syllabi": synced,
+            # 「どの課題を、Canvas のいつ時点で取り込んだか」。
+            # 拡張機能はこれと Canvas の updated_at を比べ、変わっていない
+            # 課題を送らずに済ませる(差分同期の判断材料)。
+            "assignment_state": db.assignment_sync_state(user_id),
             "pending_links": [
                 {"url": p["url"], "label": p["label"],
                  "course": p["course_name"],
@@ -668,6 +684,7 @@ def api_extension_sync():
     saved_syllabi = 0
     saved_assignments = 0
     saved_assignment_rows = 0
+    saved_modules = 0
     stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
 
     for entry in courses:
@@ -697,6 +714,45 @@ def api_extension_sync():
                         title=f"{name} syllabus", term=weeks.term_of())
             saved_syllabi += 1
 
+        # 週ごとのモジュール構成。ノート(kind='modules')として残す。
+        modules = entry.get("modules") or []
+        if modules:
+            mod_lines = [f"# {name} — weekly modules", ""]
+            for m in modules:
+                if not isinstance(m, dict):
+                    continue
+                mod_lines.append(f"## {m.get('name') or '(no name)'}")
+                for it in (m.get("items") or []):
+                    if isinstance(it, dict) and it.get("title"):
+                        mod_lines.append(f"- {it['title']}")
+                mod_lines.append("")
+            fn = f"{user_id}_{stamp}_modules_{course_id}.md"
+            (OUTPUT_DIR / fn).write_text("\n".join(mod_lines), encoding="utf-8")
+            db.add_note(user_id, course_id, "modules", fn,
+                        f"{name} modules", title=f"{name} modules",
+                        term=weeks.term_of())
+            saved_modules += 1
+
+        # 科目の文脈: Canvas の科目 ID と、シラバスから読み取った道具。
+        # 道具の抽出は語彙表との照合だけで、LLM は呼ばない(coursemap.py)。
+        canvas_id = entry.get("canvas_id")
+        tools_json = None
+        if syllabus:
+            tools = coursemap.extract_tools(syllabus)
+            if tools:
+                tools_json = coursemap.tools_to_json(tools)
+        if canvas_id or tools_json:
+            try:
+                cid = int(canvas_id) if canvas_id is not None else None
+            except (TypeError, ValueError):
+                cid = None
+            db.set_course_context(user_id, course_id, canvas_id=cid,
+                                  tools=tools_json)
+
+        # partial = 変更のあった課題だけが送られてきた差分同期。
+        # このとき一覧ノートを作り直すと、変わっていない課題が消えてしまうので
+        # 表への取り込みだけ行い、まとめノートは触らない。
+        is_partial = bool(entry.get("partial"))
         assignments = entry.get("assignments") or []
         if assignments:
             lines = [f"# {name} — 課題一覧", ""]
@@ -719,25 +775,35 @@ def api_extension_sync():
                 # 週番号は Canvas の書き方(名前の "Week 3")を最優先し、
                 # 無ければ締切日から求める(weeks.py)。
                 due_at = a.get("due_at") or None
+                a_canvas_id = a.get("id")
+                try:
+                    a_canvas_id = int(a_canvas_id) if a_canvas_id is not None else None
+                except (TypeError, ValueError):
+                    a_canvas_id = None
                 db.upsert_assignment(
                     user_id, course_id, a_name, due_at=due_at,
                     points=a.get("points"), url=a.get("url"),
                     description=desc[:4000] or None,
                     week_no=weeks.week_of(a_name, due_at),
                     term=weeks.term_of(due_at),
-                    kind=_assignment_kind(a_name, desc))
+                    kind=_assignment_kind(a_name, desc),
+                    canvas_id=a_canvas_id,
+                    canvas_updated_at=a.get("updated_at") or None,
+                    rubric=(a.get("rubric") or "").strip()[:4000] or None)
                 saved_assignment_rows += 1
 
-            fn = f"{user_id}_{stamp}_assignments_{course_id}.md"
-            (OUTPUT_DIR / fn).write_text("\n".join(lines), encoding="utf-8")
-            db.add_note(user_id, course_id, "assignments", fn,
-                       f"{name} 課題一覧", title=f"{name} 課題一覧",
-                       term=weeks.term_of())
-            saved_assignments += 1
+            if not is_partial:
+                fn = f"{user_id}_{stamp}_assignments_{course_id}.md"
+                (OUTPUT_DIR / fn).write_text("\n".join(lines), encoding="utf-8")
+                db.add_note(user_id, course_id, "assignments", fn,
+                           f"{name} 課題一覧", title=f"{name} 課題一覧",
+                           term=weeks.term_of())
+                saved_assignments += 1
 
     pending = db.list_pending_links(user_id, thin_only=True)
     return {"status": "ok", "courses": len(courses),
             "syllabi": saved_syllabi, "assignments": saved_assignments,
+            "modules": saved_modules,
             "assignment_rows": saved_assignment_rows,
             "pending_external_syllabi": [
                 {"url": p["url"], "label": p["label"],
@@ -999,6 +1065,37 @@ def api_extension_notifications_ack():
     ids = [int(v) for v in (payload.get("ids") or [])
            if str(v).isdigit()]
     return {"status": "ok", "marked": db.mark_notified(user_id, ids)}
+
+
+@app.route("/api/extension/week", methods=["GET"])
+def api_extension_week():
+    """今週の課題をまとめて返す(拡張機能が月曜の朝に1件だけ通知するため)。
+
+    返すのは一覧だけで、下書きは作らない。何を手伝わせるかは
+    /assignments で本人が選ぶ、という流れを崩さないため。
+    """
+    user_id = _extension_user_id()
+    if not user_id:
+        return {"error": "invalid or missing token"}, 401
+
+    term = weeks.term_of()
+    week_no = weeks.week_of()
+    items = []
+    for a in db.list_assignments(user_id, term=term, week_no=week_no):
+        # すでに下書き済みのものは「今週やること」から外す
+        if a["status"] == "drafted":
+            continue
+        items.append({
+            "id": a["id"],
+            "name": a["name"],
+            "course": a["course_name"] or "",
+            "due": (a["due_at"] or "")[:10],
+            "kind": a["kind"],
+            # エージェントが担当できる種類か(エッセイは空になる)
+            "agent": coursemap.allocate(a["kind"]),
+        })
+    return {"term": term, "week_no": week_no, "items": items,
+            "url": url_for("assignments_page", _external=True)}
 
 
 # ------------------------------------------------------------------ plans

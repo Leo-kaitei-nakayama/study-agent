@@ -19,12 +19,47 @@ Canvas から科目・シラバス・課題を取り込み、いま見ている�
 | 権限 | なぜ必要か |
 |---|---|
 | `storage` | 接続トークンと設定を覚える |
-| `alarms` | 定期同期(6時間)と通知の確認(30分) |
+| `alarms` | 定期同期(6時間)・通知の確認(30分)・週の始まり(毎週月曜) |
 | `activeTab` | **アイコンを押した瞬間だけ**、そのタブを撮れるようにする |
-| `notifications` | 下書きができたことを知らせる |
+| `notifications` | 下書きができたこと / 今週の課題を知らせる |
+| `host_permissions: canvas.eee.uci.edu` | Canvas の公式 API を読む |
 
 `<all_urls>` は要求していない。`activeTab` はユーザーがアイコンを押したときに
 だけ有効になるので、勝手に画面を撮ることはできない。
+
+## Canvas からの取り込み
+
+学生はすでにブラウザで Canvas にログインしている。`host_permissions` に
+Canvas を入れてあるので `fetch(..., {credentials: "include"})` にそのCookieが
+付く。**APIトークンの発行も2FAも要らない。**
+
+読むのは公式の REST API だけで、DOM を辿って画面を巡回することはしない:
+
+| 取るもの | エンドポイント |
+|---|---|
+| 履修中の科目 | `GET /api/v1/courses?enrollment_state=active&include[]=term` |
+| シラバス | `GET /api/v1/courses/{id}?include[]=syllabus_body` |
+| 課題・ルーブリック | `GET /api/v1/courses/{id}/assignments` |
+| 週ごとのモジュール | `GET /api/v1/courses/{id}/modules?include[]=items` |
+
+### 初回と2回目以降
+
+- **初回 (`fullCrawl`)** … 科目一覧・シラバス・課題・モジュールを全部取る。
+  終わったら「科目名 → Canvas科目ID」の対応表を `chrome.storage.local` に
+  覚える。
+- **2回目以降 (`incrementalSync`)** … 覚えた対応表に直接あたる(科目一覧の
+  再取得もシラバスページの再訪問もしない)。さらにサーバーに
+  `assignment_state` を聞き、Canvas の `updated_at` と一致する課題は
+  **送らない**。1件も変わっていない科目は POST 自体を省く。
+
+対応表を作り直したいときは、小窓の「再取得」で忘れさせる。
+
+## 週の始まり(毎週月曜)
+
+月曜 00:05(端末の時計、週の境目は `weeks.py` と同じく月曜)に起きて、
+差分同期をしてから `GET /api/extension/week` で今週の課題を取り、
+まとめて1件だけ通知を出す。**下書きは作らない** — 何を手伝わせるかは
+`/assignments` で本人が選ぶ。
 
 ## スクリーンショットで質問する
 
