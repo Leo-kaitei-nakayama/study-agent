@@ -12,7 +12,8 @@
 {% block content %}
 {% set kind_icons = {"notes": "📝", "draft": "✍️", "quiz": "❓",
                      "syllabus": "📋", "assignments": "📌",
-                     "resource": "📎", "practice_answer": "🧩"} %}
+                     "resource": "📎", "practice_answer": "🧩",
+                     "modules": "🗂️", "screenshot": "📷"} %}
 {% set back_url = url_for('notes_course', course_id=course.id, term=selected_term)
                   if course else url_for('notes_uncategorized', term=selected_term) %}
 
