@@ -1,0 +1,78 @@
+{#
+  削除するノートを選ぶ画面(削除の 1 段階目)。
+
+  ここでは何も消さない。「個別に選ぶ」か「この学期をぜんぶ」を選んで
+  次へ進むと、確認画面(notes_delete_confirm.html)に移る。
+  実際に消えるのはそのあと。
+#}
+{% extends "base.html" %}
+{% block title %}{{ t('delete.title') }} — Study Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ t('delete.title') }}</h1>
+  <p>{{ t('delete.subtitle') }}</p>
+</div>
+
+{% if terms|length > 1 %}
+<div class="term-tabs">
+  {% for term in terms %}
+  <a class="term-tab {% if term == selected_term %}is-active{% endif %}"
+     href="{{ url_for('notes_delete', term=term) }}">{{ term }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if notes %}
+<form method="post" action="{{ url_for('notes_delete_confirm') }}">
+  <input type="hidden" name="term" value="{{ selected_term }}">
+
+  {# 選び方。既定は「選んだものだけ」 #}
+  <div class="card">
+    <h2 class="card-title">{{ t('delete.choose') }}</h2>
+    <label class="check-inline scope-option">
+      <input type="radio" name="scope" value="selected" checked>
+      {{ t('delete.selected_only') }}
+    </label>
+    <label class="check-inline scope-option">
+      <input type="radio" name="scope" value="all">
+      {{ t('delete.everything', term=selected_term) }}
+    </label>
+  </div>
+
+  <div class="card">
+    <div class="list-toolbar">
+      <label class="check-inline">
+        <input type="checkbox" onclick="
+          this.closest('form').querySelectorAll('input[name=note_id]')
+              .forEach(cb => cb.checked = this.checked);">
+        {{ t('notes.select_all') }}
+      </label>
+      <span class="term-meta">{{ t('notes.count', count=notes|length) }}</span>
+    </div>
+
+    {% for n in notes %}
+    <label class="note-row is-selectable">
+      <input class="note-check" type="checkbox" name="note_id" value="{{ n.id }}">
+      <span class="note-source">
+        <span class="note-title">{{ n.title or n.source_name }}</span>
+        <span class="note-meta">{{ n.course_name or t('notes.uncategorized') }}</span>
+      </span>
+      <span class="note-date">{{ n.created_at[:10] }}</span>
+    </label>
+    {% endfor %}
+  </div>
+
+  <div class="form-actions">
+    <a class="btn" href="{{ url_for('notes_library', term=selected_term) }}">{{ t('delete.cancel') }}</a>
+    <button class="btn btn-danger" type="submit">{{ t('delete.continue') }}</button>
+  </div>
+</form>
+{% else %}
+<div class="card">
+  <p class="empty-state">{{ t('notes.empty_course') }}</p>
+</div>
+<p><a href="{{ url_for('notes_library', term=selected_term) }}">{{ t('notes.back_to_library') }}</a></p>
+{% endif %}
+
+{% endblock %}

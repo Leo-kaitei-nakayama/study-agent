@@ -437,3 +437,19 @@ a.cell-sub:hover { text-decoration: underline; }
 .grade-form .btn-sm { white-space: nowrap; }
 
 .show-all-row { text-align: center; margin: -4px 0 20px; }
+
+/* ------------------------------------------------ 削除の選択画面 */
+.scope-option { padding: 6px 0; }
+.scope-option input { width: auto; margin: 0; }
+.note-row.is-selectable { cursor: pointer; margin: 0; }
+.note-row.is-selectable:hover { background: var(--bg); }
+.note-meta { display: block; font-size: 12px; color: var(--text-muted); }
+.form-actions {
+  display: flex; gap: 10px; justify-content: flex-end;
+  align-items: center; flex-wrap: wrap; margin-bottom: 20px;
+}
+.week-heading {
+  font-size: 13px; font-weight: 600; color: var(--text-2);
+  margin: 18px 0 2px; padding-top: 12px; border-top: 1px solid var(--border);
+}
+.card > .week-heading:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }

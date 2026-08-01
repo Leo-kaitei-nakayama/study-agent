@@ -1,0 +1,81 @@
+{#
+  課題の一覧(ノート一覧から分離した専用ページ)。
+
+  構成:
+    1. クォーターのタブ
+    2. 今週の課題 + まとめて下書きさせるボタン
+    3. それ以外の週(新しい週が上)
+
+  下書きボタンは **提出しない**。作るのは下書きまでで、出すかどうかは本人が決める。
+  1 行の描き方は _assignment_row.html に切り出して、今週ぶんと他の週で共用する。
+#}
+{% extends "base.html" %}
+{% block title %}{{ t('assignments.title') }} — Study Agent{% endblock %}
+{% block content %}
+
+<div class="intro-hero">
+  <h1>{{ t('assignments.title') }}</h1>
+  <p>{{ t('assignments.subtitle') }}</p>
+</div>
+
+{% if terms|length > 1 %}
+<div class="term-tabs">
+  {% for term in terms %}
+  <a class="term-tab {% if term == selected_term %}is-active{% endif %}"
+     href="{{ url_for('assignments_page', term=term) }}"
+     {% if term == selected_term %}aria-current="true"{% endif %}>{{ term }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ------------------------------------------------ 今週 #}
+<div class="card">
+  <div class="card-head">
+    <h2 class="card-title">{{ t('notes.this_week') }}</h2>
+    <span class="term-meta">
+      {{ t('notes.this_week_sub', n=this_week, count=week_assignments|length) }}
+    </span>
+  </div>
+
+  {% if week_assignments %}
+  <ul class="assignment-list">
+    {% for a in week_assignments %}
+      {% include "_assignment_row.html" %}
+    {% endfor %}
+  </ul>
+
+  <form method="post" action="{{ url_for('notes_run_week') }}" class="week-actions">
+    <input type="hidden" name="term" value="{{ selected_term }}">
+    <input type="hidden" name="week" value="{{ this_week }}">
+    <button class="btn btn-primary" type="submit">{{ t('notes.run_week') }}</button>
+    <span class="fine-print">{{ t('notes.run_week_note') }}</span>
+  </form>
+  {% else %}
+  <p class="empty-state">{{ t('notes.this_week_empty') }}</p>
+  {% endif %}
+</div>
+
+{# ------------------------------------------------ 他の週 #}
+{% if other_weeks %}
+<div class="card">
+  <div class="card-head">
+    <h2 class="card-title">{{ t('assignments.other_weeks') }}</h2>
+  </div>
+  {% for group in other_weeks %}
+  <h3 class="week-heading">
+    {{ t('notes.week_label', n=group.week) if group.week else t('notes.no_due') }}
+  </h3>
+  <ul class="assignment-list">
+    {% for a in group['items'] %}
+      {% include "_assignment_row.html" %}
+    {% endfor %}
+  </ul>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if not total %}
+<p class="empty-centered">{{ t('assignments.empty') }}</p>
+{% endif %}
+
+{% endblock %}

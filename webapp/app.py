@@ -236,22 +236,48 @@ def _term_tabs(user_id: int) -> tuple[list[str], str]:
 @app.route("/notes")
 @login_required
 def notes_library():
-    """科目ごとのノート一覧。クォーターのタブで絞り込む。"""
+    """科目ごとのノート一覧。クォーターのタブで絞り込む。
+
+    課題の一覧は /assignments に分けた(この画面はノートだけにするため)。
+    """
     user_id = session["user_id"]
     tabs, selected = _term_tabs(user_id)
     counts = db.notes_count_by_course(user_id, term=selected)
-
-    # 今週の課題(「今週の課題」ボタンの中身)
-    this_week = weeks.week_of()
     return render_template(
         "notes_library.html",
         courses=db.list_user_courses(user_id),
         counts=counts,
         uncategorized_count=counts.get(None, 0),
+        terms=tabs, selected_term=selected)
+
+
+@app.route("/assignments")
+@login_required
+def assignments_page():
+    """課題の一覧。今週ぶんを先頭に出し、その下に他の週を並べる。
+
+    まとめて下書きさせるボタンもここに置く(ノート一覧から移した)。
+    """
+    user_id = session["user_id"]
+    tabs, selected = _term_tabs(user_id)
+    this_week = weeks.week_of()
+
+    all_items = db.list_assignments(user_id, term=selected)
+    current = [a for a in all_items if a["week_no"] == this_week]
+
+    # 今週以外は週ごとにまとめる(新しい週が上)
+    others: dict[int, list] = {}
+    for a in all_items:
+        if a["week_no"] != this_week:
+            others.setdefault(a["week_no"] or 0, []).append(a)
+    other_weeks = [{"week": w, "items": items}
+                   for w, items in sorted(others.items(), reverse=True)]
+
+    return render_template(
+        "assignments.html",
         terms=tabs, selected_term=selected,
-        this_week=this_week,
-        week_assignments=db.list_assignments(user_id, term=selected,
-                                             week_no=this_week))
+        this_week=this_week, week_assignments=current,
+        other_weeks=other_weeks, total=len(all_items))
 
 
 @app.route("/notes/course/<int:course_id>")
@@ -312,33 +338,63 @@ def notes_download(note_id):
                      download_name=f"{safe}{suffix}")
 
 
-@app.route("/notes/delete", methods=["POST"])
+# ------------------------------------------------------------ ノートの削除
+# 誤って全部消さないよう、3 段階に分ける:
+#   1. /notes/delete        … 何を消すか選ぶ(個別 or その学期ぜんぶ)
+#   2. /notes/delete/confirm … 消す一覧を見せて最終確認
+#   3. /notes/delete/apply   … ここで初めて実際に消す
+# ブラウザの confirm() だけに頼らないので、JS が効かない環境でも確認が挟まる。
+@app.route("/notes/delete")
 @login_required
 def notes_delete():
-    """選んだノートを削除する。チェックが無ければ何もしない。"""
+    """削除するノートを選ぶ画面。"""
     user_id = session["user_id"]
-    ids = [int(v) for v in request.form.getlist("note_id") if v.isdigit()]
-    removed = db.delete_notes(user_id, ids)
-    _remove_output_files(removed)
-    flash(t("flash.notes_deleted", count=len(removed)) if removed
-          else t("flash.nothing_selected"))
-    return redirect(request.form.get("back") or url_for("notes_library"))
+    tabs, selected = _term_tabs(user_id)
+    return render_template(
+        "notes_delete.html",
+        notes=db.list_notes_for_term(user_id, selected),
+        terms=tabs, selected_term=selected)
 
 
-@app.route("/notes/delete-all", methods=["POST"])
+@app.route("/notes/delete/confirm", methods=["POST"])
 @login_required
-def notes_delete_all():
-    """表示中のクォーター(と科目)のノートをまとめて削除する。"""
+def notes_delete_confirm():
+    """本当に消すか確認する画面。ここではまだ何も消さない。"""
     user_id = session["user_id"]
-    course_raw = request.form.get("course_id", "").strip()
-    course_id = int(course_raw) if course_raw.isdigit() else None
+    term = request.form.get("term", "").strip() or None
+    scope = request.form.get("scope", "selected")
+
+    if scope == "all":
+        targets = db.list_notes_for_term(user_id, term)
+    else:
+        ids = [int(v) for v in request.form.getlist("note_id") if v.isdigit()]
+        targets = db.get_notes_by_ids(user_id, ids)
+
+    if not targets:
+        flash(t("flash.nothing_selected"))
+        return redirect(url_for("notes_delete", term=term))
+
+    return render_template("notes_delete_confirm.html",
+                          notes=targets, term=term, scope=scope)
+
+
+@app.route("/notes/delete/apply", methods=["POST"])
+@login_required
+def notes_delete_apply():
+    """確認画面から来たときだけ、実際に削除する。"""
+    user_id = session["user_id"]
     term = request.form.get("term", "").strip() or None
 
-    removed = db.delete_all_notes(user_id, course_id=course_id, term=term)
+    if request.form.get("scope") == "all":
+        removed = db.delete_all_notes(user_id, term=term)
+    else:
+        ids = [int(v) for v in request.form.getlist("note_id") if v.isdigit()]
+        removed = db.delete_notes(user_id, ids)
+
     _remove_output_files(removed)
     flash(t("flash.notes_deleted", count=len(removed)) if removed
           else t("flash.nothing_selected"))
-    return redirect(request.form.get("back") or url_for("notes_library"))
+    return redirect(url_for("notes_library", term=term))
 
 
 #: 1 回のボタン操作で下書きする上限。押しっぱなしで際限なく課金されないための歯止め。
@@ -368,7 +424,7 @@ def notes_run_week():
                if a["kind"] != "essay" and a["status"] == "todo"]
     if not pending:
         flash(t("flash.week_nothing"))
-        return redirect(url_for("notes_library", term=term))
+        return redirect(url_for("assignments_page", term=term))
 
     context = _week_notes_context(user_id, term, week_no)
     routing = _user_routing(user_id)
@@ -387,7 +443,7 @@ def notes_run_week():
     flash(t("flash.week_drafted", count=done) if done else t("flash.week_failed"))
     if failed:
         flash(t("flash.week_partial", count=failed))
-    return redirect(url_for("notes_library", term=term))
+    return redirect(url_for("assignments_page", term=term))
 
 
 def _week_notes_context(user_id: int, term: str, week_no: int,
