@@ -427,6 +427,55 @@ def list_user_courses(user_id: int) -> list:
             (user_id,)).fetchall()
 
 
+def course_delete_summary(user_id: int, course_id: int) -> dict:
+    """その科目を消すと何が一緒に消えるか(確認画面に出す数)。"""
+    with _conn() as c:
+        return {
+            "notes": c.execute("SELECT COUNT(*) AS n FROM notes "
+                               "WHERE user_id=%s AND course_id=%s",
+                               (user_id, course_id)).fetchone()["n"],
+            "assignments": c.execute("SELECT COUNT(*) AS n FROM assignments "
+                                     "WHERE user_id=%s AND course_id=%s",
+                                     (user_id, course_id)).fetchone()["n"],
+            "credentials": c.execute("SELECT COUNT(*) AS n FROM site_credentials "
+                                     "WHERE user_id=%s AND course_id=%s",
+                                     (user_id, course_id)).fetchone()["n"],
+        }
+
+
+def delete_course(user_id: int, course_id: int) -> list[str]:
+    """科目を丸ごと消す。ノート・課題・リンクも一緒に消える。
+
+    消したノートのファイル名を返す(実ファイルの削除は呼び出し側)。
+
+    消す順番は外部キーの向きに合わせる:
+      1. この科目のノートを指している assignments.note_id を外す
+         (別の科目の課題が、この科目のノートを指していることがあるため)
+      2. この科目の課題を消す
+      3. この科目のノートを消す
+      4. ログイン情報は **消さずに科目との紐付けだけ外す**
+         (サイトのパスワードは科目を消しても使い続けたいことがある)
+      5. 取り込んだ外部リンクを消す
+      6. 科目そのものを消す
+    """
+    with _conn() as c:
+        c.execute("""UPDATE assignments SET note_id=NULL WHERE user_id=%s
+                     AND note_id IN (SELECT id FROM notes
+                                     WHERE user_id=%s AND course_id=%s)""",
+                  (user_id, user_id, course_id))
+        c.execute("DELETE FROM assignments WHERE user_id=%s AND course_id=%s",
+                  (user_id, course_id))
+        rows = c.execute("DELETE FROM notes WHERE user_id=%s AND course_id=%s "
+                         "RETURNING filename", (user_id, course_id)).fetchall()
+        c.execute("UPDATE site_credentials SET course_id=NULL "
+                  "WHERE user_id=%s AND course_id=%s", (user_id, course_id))
+        c.execute("DELETE FROM external_links WHERE user_id=%s AND course_id=%s",
+                  (user_id, course_id))
+        c.execute("DELETE FROM courses WHERE id=%s AND user_id=%s",
+                  (course_id, user_id))
+        return [r["filename"] for r in rows]
+
+
 def get_course(user_id: int, course_id: int):
     with _conn() as c:
         return c.execute("SELECT * FROM courses WHERE id=%s AND user_id=%s",

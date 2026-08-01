@@ -243,12 +243,40 @@ def notes_library():
     user_id = session["user_id"]
     tabs, selected = _term_tabs(user_id)
     counts = db.notes_count_by_course(user_id, term=selected)
+    # ?edit=1 で iPhone のホーム画面のような編集モードになり、
+    # 各タイルの角に ✕ が出て、その科目ごと消せる。
     return render_template(
         "notes_library.html",
         courses=db.list_user_courses(user_id),
         counts=counts,
         uncategorized_count=counts.get(None, 0),
-        terms=tabs, selected_term=selected)
+        terms=tabs, selected_term=selected,
+        edit_mode=request.args.get("edit") == "1")
+
+
+@app.route("/notes/course/<int:course_id>/delete", methods=["GET", "POST"])
+@login_required
+def notes_course_delete(course_id):
+    """科目のタイルごと消す(ノート・課題・リンクも一緒に)。
+
+    GET で「何が消えるか」を見せ、POST で実際に消す。
+    ログイン情報だけは消さず、科目との紐付けを外すだけにする
+    (サイトのパスワードは科目を消した後も使うことがあるため)。
+    """
+    user_id = session["user_id"]
+    course = db.get_course(user_id, course_id)
+    if not course:
+        flash(t("flash.course_missing"))
+        return redirect(url_for("notes_library"))
+
+    if request.method == "POST":
+        removed = db.delete_course(user_id, course_id)
+        _remove_output_files(removed)
+        flash(t("flash.course_deleted", name=course["name"], count=len(removed)))
+        return redirect(url_for("notes_library"))
+
+    return render_template("notes_course_delete.html", course=course,
+                          summary=db.course_delete_summary(user_id, course_id))
 
 
 @app.route("/assignments")

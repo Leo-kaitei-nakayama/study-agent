@@ -1,0 +1,36 @@
+{#
+  科目タイルを丸ごと消す前の確認画面。
+
+  何件のノート・課題が一緒に消えるかを数で見せる。ログイン情報は消さず、
+  科目との紐付けを外すだけ(サイトのパスワードは後でも使うことがあるため)。
+  この画面を出した時点ではまだ何も消えていない。
+#}
+{% extends "base.html" %}
+{% block title %}{{ t('notes.delete_course_title') }} — Study Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ t('notes.delete_course_title') }}</h1>
+  <p>{{ course.name }}</p>
+</div>
+
+<div class="warn-banner">{{ t('notes.delete_course_warning', name=course.name) }}</div>
+
+<div class="card">
+  <ul class="bullet-list">
+    <li>{{ t('notes.delete_course_notes', count=summary.notes) }}</li>
+    <li>{{ t('notes.delete_course_assignments', count=summary.assignments) }}</li>
+    {% if summary.credentials %}
+    <li>{{ t('notes.delete_course_credentials', count=summary.credentials) }}</li>
+    {% endif %}
+  </ul>
+</div>
+
+<form method="post" class="form-actions">
+  <a class="btn" href="{{ url_for('notes_library') }}">{{ t('delete.cancel') }}</a>
+  <button class="btn btn-danger" type="submit">
+    {{ t('notes.delete_course_confirm', name=course.name) }}
+  </button>
+</form>
+
+{% endblock %}

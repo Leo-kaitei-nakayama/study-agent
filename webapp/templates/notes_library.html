@@ -6,7 +6,12 @@
     2. 科目ごとのタイル — 中身は notes_course.html へ
 
   課題の一覧は /assignments に分けてある(この画面はノートだけにするため)。
-  削除は「選ぶ → 確認 → 削除」の 3 段階(notes_delete.html)。
+
+  削除は 2 通り:
+    - 「編集」(?edit=1)… iPhone のホーム画面のように各タイルの角に ✕ が出て、
+      その科目を丸ごと消せる(ノート・課題・リンクも一緒に)
+    - 「ノートを削除」… 科目は残したまま、ノートだけを選んで消す
+  どちらも確認画面を必ず挟む。
 #}
 {% extends "base.html" %}
 {% block title %}{{ t('notes.title') }} — Study Agent{% endblock %}
@@ -22,28 +27,47 @@
 <div class="term-tabs">
   {% for term in terms %}
   <a class="term-tab {% if term == selected_term %}is-active{% endif %}"
-     href="{{ url_for('notes_library', term=term) }}"
+     href="{{ url_for('notes_library', term=term, edit=1 if edit_mode else None) }}"
      {% if term == selected_term %}aria-current="true"{% endif %}>{{ term }}</a>
   {% endfor %}
+</div>
+{% endif %}
+
+{# ------------------------------------------------ 編集モードの案内 #}
+{% if edit_mode and courses %}
+<div class="select-banner">
+  <span>{{ t('notes.edit_hint') }}</span>
+  <a class="btn btn-sm" href="{{ url_for('notes_library', term=selected_term) }}">
+    {{ t('notes.edit_done') }}
+  </a>
 </div>
 {% endif %}
 
 {# ------------------------------------------------ 科目ごとのタイル #}
 <div class="notes-grid">
   {% for c in courses %}
-  <a class="notes-tile" href="{{ url_for('notes_course', course_id=c.id, term=selected_term) }}">
-    <div class="notes-tile-icon">📘</div>
-    <div class="notes-tile-name">{{ c.name }}</div>
-    <div class="notes-tile-count">{{ t('notes.count_one') if counts.get(c.id, 0) == 1 else t('notes.count', count=counts.get(c.id, 0)) }}</div>
-  </a>
+  <div class="tile-wrap {% if edit_mode %}is-editing{% endif %}">
+    {% if edit_mode %}
+    {# iPhone のホーム画面と同じく、角の ✕ で消す #}
+    <a class="tile-remove" title="{{ t('common.delete') }}"
+       href="{{ url_for('notes_course_delete', course_id=c.id) }}">×</a>
+    {% endif %}
+    <a class="notes-tile" href="{{ url_for('notes_course', course_id=c.id, term=selected_term) }}">
+      <div class="notes-tile-icon">📘</div>
+      <div class="notes-tile-name">{{ c.name }}</div>
+      <div class="notes-tile-count">{{ t('notes.count_one') if counts.get(c.id, 0) == 1 else t('notes.count', count=counts.get(c.id, 0)) }}</div>
+    </a>
+  </div>
   {% endfor %}
 
   {% if uncategorized_count > 0 %}
-  <a class="notes-tile" href="{{ url_for('notes_uncategorized', term=selected_term) }}">
-    <div class="notes-tile-icon">📄</div>
-    <div class="notes-tile-name">{{ t('notes.uncategorized') }}</div>
-    <div class="notes-tile-count">{{ t('notes.count_one') if uncategorized_count == 1 else t('notes.count', count=uncategorized_count) }}</div>
-  </a>
+  <div class="tile-wrap">
+    <a class="notes-tile" href="{{ url_for('notes_uncategorized', term=selected_term) }}">
+      <div class="notes-tile-icon">📄</div>
+      <div class="notes-tile-name">{{ t('notes.uncategorized') }}</div>
+      <div class="notes-tile-count">{{ t('notes.count_one') if uncategorized_count == 1 else t('notes.count', count=uncategorized_count) }}</div>
+    </a>
+  </div>
   {% endif %}
 </div>
 
@@ -51,9 +75,13 @@
 <p class="empty-centered">{{ t('notes.empty_library') }}</p>
 {% endif %}
 
-{# 削除は選択画面へ。ここから直接は消さない(選ぶ → 確認 → 削除)。
-   その学期にノートが無くても、他の学期には有りうるので常に出す。 #}
+{# ------------------------------------------------ 削除の入口 #}
 <p class="danger-row">
+  {% if not edit_mode and courses %}
+  <a class="btn btn-sm" href="{{ url_for('notes_library', term=selected_term, edit=1) }}">
+    {{ t('notes.edit_courses') }}
+  </a>
+  {% endif %}
   <a class="btn btn-sm btn-danger" href="{{ url_for('notes_delete', term=selected_term) }}">
     {{ t('delete.title') }}
   </a>
