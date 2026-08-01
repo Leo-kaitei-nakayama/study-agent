@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Study Agent — how an extension controls a page</title>
+<!--
+  拡張機能がページをどう操作するのかを、実際に動かして見せるための練習台。
+
+  ここに書いてあるコードは content.js に入れるものとまったく同じ書き方。
+  違うのは「誰のページを触るか」だけ:
+
+    - content.js … manifest の matches に書いたサイト(= canvas.eee.uci.edu)
+    - このページ … 自分自身(拡張機能に同梱した、誰のものでもないページ)
+
+  だから権限を増やさずに、読む・書く・押す・待つ の全部を試せる。
+  ブラウザで直接開けばよい(拡張機能を入れていなくても動く)。
+
+  対応する解説: extension/PAGE-CONTROL.md
+-->
+<style>
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+         margin: 0; background: #faf9f6; color: #1f1e1a; line-height: 1.6; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { color: #6b6960; font-size: 14px; margin: 0 0 24px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  .card { background: #fff; border: 1px solid #e5e2da; border-radius: 14px; padding: 20px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: #6b6960; }
+  .stage { min-height: 190px; }
+  .step-name { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .step-body { font-size: 14px; color: #4a4842; margin: 0 0 14px; }
+  .fake-video { background: #1f1e1a; color: #fff; border-radius: 8px; padding: 26px;
+                text-align: center; font-size: 13px; margin-bottom: 14px; }
+  button { padding: 8px 16px; font-size: 13px; border-radius: 8px; cursor: pointer;
+           border: 1px solid #185fa5; background: #185fa5; color: #fff; }
+  button.ghost { background: #fff; color: #185fa5; }
+  button:disabled { opacity: .45; cursor: default; }
+  textarea { width: 100%; min-height: 70px; font: inherit; font-size: 13px;
+             padding: 8px; border: 1px solid #e5e2da; border-radius: 8px; }
+  .log { font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+         background: #f5f4f0; border: 1px solid #e5e2da; border-radius: 8px;
+         padding: 10px; height: 300px; overflow-y: auto; white-space: pre-wrap; }
+  .log b { color: #0c447c; }
+  .log .warn { color: #a52121; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+          background: #e6f1fb; color: #0c447c; margin-left: 6px; }
+  .note { font-size: 12px; color: #6b6960; background: #eef2f7; border-radius: 8px;
+          padding: 10px; margin-top: 12px; }
+  .stop { background: #fff3d6; color: #7a5a00; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>How a Chrome extension controls a page</h1>
+  <p class="sub">
+    A practice page that behaves like a multi-step course module. The driver on the
+    right uses the exact DOM calls a content script uses — read, type, click, wait.
+    Nothing here talks to Canvas or to any server.
+  </p>
+
+  <div class="cols">
+    <!-- ========================= 操作される側(ページ) ========================= -->
+    <div class="card">
+      <h2>The page <span class="pill" id="stepCount">step 1 / 5</span></h2>
+      <div class="stage" id="stage"></div>
+    </div>
+
+    <!-- ========================= 操作する側(拡張機能) ======================== -->
+    <div class="card">
+      <h2>The driver — what content.js would run</h2>
+      <button id="run">Run the driver</button>
+      <button id="reset" class="ghost">Reset</button>
+      <div class="log" id="log"></div>
+      <div class="note">
+        The driver stops on its own at the graded question and hands control back.
+        Reading a page and typing a draft are things software can do for you;
+        deciding an answer is yours.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =====================================================================
+// 操作される側 — 「動画を見て Next、最後に設問」という作りのページ。
+// =====================================================================
+const STEPS = [
+  { kind: "video", name: "1.01 — Introduction",  body: "A short clip plays here." },
+  { kind: "video", name: "1.02 — Objectives",    body: "Another clip." },
+  { kind: "page",  name: "1.03 — Reading",       body: "A page of text to read." },
+  { kind: "video", name: "1.04 — Worked example", body: "One more clip." },
+  { kind: "quiz",  name: "1.05 — Check your understanding",
+    body: "In your own words, what was the main point of the reading?" },
+];
+
+let current = 0;
+
+function renderStep() {
+  const s = STEPS[current];
+  const stage = document.getElementById("stage");
+  stage.textContent = "";
+  document.getElementById("stepCount").textContent =
+    `step ${current + 1} / ${STEPS.length}`;
+
+  const h = document.createElement("p");
+  h.className = "step-name";
+  h.textContent = s.name;
+  stage.appendChild(h);
+
+  const b = document.createElement("p");
+  b.className = "step-body";
+  b.textContent = s.body;
+  stage.appendChild(b);
+
+  if (s.kind === "video") {
+    const v = document.createElement("div");
+    v.className = "fake-video";
+    v.textContent = "▶ video";
+    stage.appendChild(v);
+  }
+
+  if (s.kind === "quiz") {
+    // 設問には name を付けておく。拡張機能はこれを目印に欄を探す。
+    const ta = document.createElement("textarea");
+    ta.id = "answer";
+    ta.name = "answer";
+    ta.placeholder = "Type your answer";
+    stage.appendChild(ta);
+    return;                       // クイズには Next を出さない = ここで終わり
+  }
+
+  const next = document.createElement("button");
+  next.id = "next";
+  next.textContent = "Next";
+  next.addEventListener("click", () => {
+    if (current < STEPS.length - 1) { current++; renderStep(); }
+  });
+  stage.appendChild(next);
+}
+
+// =====================================================================
+// 操作する側 — content.js に書くのとまったく同じ4つの操作。
+//   1. 読む   … querySelector / textContent
+//   2. 押す   … element.click()
+//   3. 待つ   … MutationObserver(ページが変わるまで)
+//   4. 書く   … value + dispatchEvent(input/change)
+// =====================================================================
+const logEl = document.getElementById("log");
+function log(msg, cls) {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.innerHTML = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// --- 3. 待つ ---------------------------------------------------------
+// クリックしたあとページが描き変わるまで待つ。setTimeout で「たぶん1秒」と
+// 決め打ちするより、MutationObserver で「実際に変わった」を見るほうが確実。
+function waitForChange(target, timeoutMs = 3000) {
+  return new Promise((resolve, reject) => {
+    const obs = new MutationObserver(() => { obs.disconnect(); resolve(); });
+    obs.observe(target, { childList: true, subtree: true });
+    setTimeout(() => { obs.disconnect(); reject(new Error("timed out")); }, timeoutMs);
+  });
+}
+
+// --- 1. 読む ---------------------------------------------------------
+function readStep() {
+  const stage = document.getElementById("stage");
+  return {
+    name: stage.querySelector(".step-name")?.textContent ?? "",
+    body: stage.querySelector(".step-body")?.textContent ?? "",
+    // 「設問かどうか」は見た目ではなく、答える欄があるかで判断する
+    isQuestion: !!stage.querySelector("textarea, input[type=text]"),
+    nextButton: stage.querySelector("#next"),
+  };
+}
+
+// --- 4. 書く ---------------------------------------------------------
+// value を入れるだけでは React/Vue のページは気づかない。人が打ったときと
+// 同じイベントを発火させて初めて、ページ側の状態が更新される。
+function typeInto(el, text) {
+  el.value = text;
+  el.dispatchEvent(new Event("input",  { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function drive() {
+  document.getElementById("run").disabled = true;
+  logEl.textContent = "";
+  log("<b>driver started</b>");
+
+  const stage = document.getElementById("stage");
+
+  for (let i = 0; i < 20; i++) {                 // 上限を決めて暴走を防ぐ
+    const step = readStep();
+    log(`read  → <b>${step.name}</b>`);
+
+    if (step.isQuestion) {
+      log("found a graded question — <b>stopping here</b>", "warn");
+      const box = stage.querySelector("textarea");
+      // 下書きを入れるところまで。送信ボタンは探しにも行かない。
+      typeInto(box, "[draft] Write your own answer here — the driver stops at "
+                  + "graded questions on purpose.");
+      log("typed a draft into the answer box (no submit)");
+      break;
+    }
+
+    if (!step.nextButton) { log("no Next button — done"); break; }
+
+    // --- 2. 押す ---
+    const changed = waitForChange(stage);
+    step.nextButton.click();
+    log("click → Next");
+    try {
+      await changed;
+      log("wait  → page changed");
+    } catch (e) {
+      log("wait  → timed out, stopping", "warn");
+      break;
+    }
+  }
+
+  log("<b>driver finished</b>");
+  document.getElementById("run").disabled = false;
+}
+
+document.getElementById("run").addEventListener("click", drive);
+document.getElementById("reset").addEventListener("click", () => {
+  current = 0; renderStep(); logEl.textContent = "";
+  document.getElementById("run").disabled = false;
+});
+
+renderStep();
+</script>
+</body>
+</html>
