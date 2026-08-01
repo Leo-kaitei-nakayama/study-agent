@@ -870,12 +870,21 @@ def academic():
     rows = db.list_transcript_courses(user_id)
     # 公式集計(成績表末尾の UC GPA など)があればそちらを見出しに使う
     official = db.get_official_totals(user_id)
+    terms = transcript_parser.group_by_term(rows, profile["school"])
+
+    # 既定では最新の学期だけを開き、残りは「すべて表示」で開く。
+    # 7 学期ぶん全部を常に出すと画面が長くなりすぎるため。
+    show_all = request.args.get("all") == "1"
     return render_template(
         "academic.html",
         school=sch,
         meta=db.get_transcript_meta(user_id),
         summary=transcript_parser.compute_gpa(rows, profile["school"], official),
-        terms=transcript_parser.group_by_term(rows, profile["school"]),
+        terms=terms,
+        visible_terms=terms if show_all else terms[:1],
+        show_all=show_all,
+        hidden_count=max(0, len(terms) - 1),
+        in_progress_label=transcript_parser.IN_PROGRESS,
         has_data=bool(rows))
 
 
@@ -910,22 +919,76 @@ def academic_upload():
     return redirect(url_for("academic"))
 
 
+@app.route("/academic/schedule", methods=["POST"])
+@login_required
+def academic_schedule():
+    """履修予定表(Study List)を取り込み、まだ成績が出ていない科目を足す。
+
+    成績は "N/A"(履修中)として入り、出たら画面から入力できる。
+    GPA や取得単位には数えず、「履修中」として別に集計する。
+    """
+    user_id = session["user_id"]
+    profile = db.get_profile(user_id)
+    f = request.files.get("file")
+    if not f or not f.filename:
+        flash(t("flash.schedule_missing"))
+        return redirect(url_for("academic"))
+
+    raw = f.read()
+    try:
+        html = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        html = raw.decode("latin-1", errors="replace")
+
+    result = transcript_parser.parse_schedule_html(
+        html, profile["school"] if profile else None)
+    if result["error"]:
+        flash(result["error"])
+        return redirect(url_for("academic"))
+
+    # すでに成績が確定している科目は取り込まない(履修中として二重に出さないため)
+    known = {(r["term"], r["code"]) for r in db.list_transcript_courses(user_id)
+             if r["source"] != "schedule"}
+    fresh = [c for c in result["courses"] if (c["term"], c["code"]) not in known]
+
+    count = db.replace_schedule(user_id, fresh)
+    flash(t("flash.schedule_imported", count=count,
+            terms=", ".join(result["terms"])))
+    return redirect(url_for("academic"))
+
+
+@app.route("/academic/grade/<int:row_id>", methods=["POST"])
+@login_required
+def academic_set_grade(row_id):
+    """履修中の科目に、成績が出たあとで成績を入力する。"""
+    user_id = session["user_id"]
+    grade = request.form.get("grade", "").strip().upper()
+    if not grade:
+        flash(t("flash.manual_fields_required"))
+    elif db.set_transcript_grade(user_id, row_id, grade):
+        flash(t("flash.grade_saved", grade=grade))
+    return redirect(url_for("academic", all=request.form.get("all") or None))
+
+
 @app.route("/academic/manual", methods=["POST"])
 @login_required
 def academic_manual():
-    """HTML の解析に失敗したとき用に、履修を 1 件ずつ手入力で足す。"""
+    """HTML の解析に失敗したとき用に、履修を 1 件ずつ手入力で足す。
+
+    成績を空のまま出すと「履修中(N/A)」として登録され、あとから入力できる。
+    """
     user_id = session["user_id"]
     term = request.form.get("term", "").strip()
     code = request.form.get("code", "").strip().upper()
     title = request.form.get("title", "").strip()
-    grade = request.form.get("grade", "").strip().upper()
+    grade = request.form.get("grade", "").strip().upper() or transcript_parser.IN_PROGRESS
     try:
         units = float(request.form.get("units", ""))
     except ValueError:
         flash(t("flash.units_numeric"))
         return redirect(url_for("academic"))
 
-    if not (term and code and grade) or units <= 0:
+    if not (term and code) or units <= 0:
         flash(t("flash.manual_fields_required"))
         return redirect(url_for("academic"))
 
