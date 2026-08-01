@@ -1,8 +1,16 @@
 {#
   課題 1 行。assignments.html から include して使う(今週ぶんと他の週で共用)。
   変数 a に課題の行が入っている前提。
+
+  select_mode が真のときは、下書きさせる課題を選ぶチェックボックスを出す。
+  エッセイと下書き済みのものはチェックできない(下書きの対象外なので)。
 #}
+{% set draftable = a.kind != 'essay' and a.status == 'todo' %}
 <li class="assignment-row">
+  {% if select_mode %}
+  <input class="assignment-check" type="checkbox" name="assignment_id" value="{{ a.id }}"
+         aria-label="{{ a.name }}" {% if not draftable %}disabled{% endif %}>
+  {% endif %}
   <span class="assignment-kind kind-{{ a.kind }}">{{ t('notes.akind_' ~ a.kind) }}</span>
   <span class="assignment-main">
     <span class="assignment-name">{{ a.name }}</span>

@@ -57,12 +57,10 @@
   {% endif %}
 </div>
 
-{% if notes %}
 <p class="danger-row">
   <a class="btn btn-sm btn-danger" href="{{ url_for('notes_delete', term=selected_term) }}">
     {{ t('delete.title') }}
   </a>
 </p>
-{% endif %}
 
 {% endblock %}
