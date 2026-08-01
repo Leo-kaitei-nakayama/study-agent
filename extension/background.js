@@ -232,11 +232,13 @@ async function runSync(reason = "manual") {
 
   await setStatus("Syncing...");
   try {
-    const { courseMap } = await chrome.storage.local.get({ courseMap: null });
+    const { courseMap, courseMapTerm } = await chrome.storage.local.get(
+      { courseMap: null, courseMapTerm: null });
+    const { selectedTerm } = await chrome.storage.sync.get({ selectedTerm: "" });
 
     let result;
-    if (!courseMap) {
-      // 初回のみ: 科目一覧・シラバス・課題を全部巡回して構造を記憶する
+    if (needsFullCrawl(courseMap, courseMapTerm, selectedTerm)) {
+      // 科目一覧・シラバス・課題を全部巡回して構造を記憶する
       result = await fullCrawl(state.token);
     } else {
       // 2回目以降: 記憶した科目IDに直接アクセスするだけ。
@@ -253,6 +255,21 @@ async function runSync(reason = "manual") {
     await setStatus(msg);
     return { ok: false, error: msg };
   }
+}
+
+// 覚えている科目一覧を使ってよいか、作り直すべきかを決める。
+//
+// **学期の絞り込みが効くのはフルクロールのときだけ** なので、覚えた一覧が
+// 別の学期のものだと、差分同期はその古い一覧をずっと使い続けてしまう。
+// 学期を変えても過去の科目が同期され続けていたのはこれが原因。
+//
+// courseMapTerm が null = 学期を記録するようになる前に作られた一覧。
+// 中身が信用できないので作り直す(だから拡張機能を入れ替えた直後の1回は
+// 必ずフルクロールになる)。
+function needsFullCrawl(courseMap, courseMapTerm, selectedTerm) {
+  if (!courseMap) return true;
+  if (courseMapTerm === null || courseMapTerm === undefined) return true;
+  return courseMapTerm !== (selectedTerm || "");
 }
 
 // 初回フルクロール: 科目一覧を取得し、各科目のシラバス・課題を巡回する。
@@ -336,7 +353,10 @@ async function fullCrawl(token) {
   }
 
   const res = await apiPost("/api/extension/sync", token, payload);
-  await chrome.storage.local.set({ courseMap, courseMapSavedAt: Date.now() });
+  // どの学期ぶんの一覧かも一緒に覚える。次の同期でこれを見て、学期が
+  // 変わっていたら作り直す(差分同期が古い学期を引きずらないように)。
+  await chrome.storage.local.set({ courseMap, courseMapTerm: selectedTerm || "",
+                                   courseMapSavedAt: Date.now() });
   await progressFinish();
 
   // 前の学期の科目が片付いたら、そのことも出す(黙って消さない)
@@ -407,7 +427,8 @@ async function incrementalSync(token, courseMap) {
 
 // 記憶した科目一覧を強制的に忘れて、次回フルクロールし直す(手動リセット用)
 async function forgetCourseMap() {
-  await chrome.storage.local.remove(["courseMap", "courseMapSavedAt"]);
+  await chrome.storage.local.remove(
+    ["courseMap", "courseMapTerm", "courseMapSavedAt"]);
 }
 
 async function setStatus(text) {
