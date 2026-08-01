@@ -53,6 +53,18 @@ SCHOOLS = {
             "academic.step_save",
             "academic.step_upload",
         ],
+        # 履修予定表(Study List)を取り込む手順。まだ成績が出ていない科目を
+        # 「履修中(N/A)」として一覧に足すために使う。
+        "schedule_help_keys": [
+            "academic.step_login",
+            "academic.sched_step_open",
+            "academic.step_save",
+            "academic.sched_step_upload",
+        ],
+        # 成績を後から入力するときのプルダウンの選択肢。
+        # GPA 対象の成績 → 合否系 → 履修中、の順に並べる。
+        "grade_options": ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-",
+                          "D+", "D", "D-", "F", "P", "NP", "W", "I"],
         "grade_points": UCI_GRADE_POINTS,
         "passing_non_gpa": UCI_PASSING_NON_GPA,
     },

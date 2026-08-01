@@ -45,9 +45,21 @@
           <div class="label">{{ t('academic.gpa_units') }}</div>
           <div class="value">{{ summary.gpa_units }}</div>
         </div>
+        {% if summary.units_in_progress %}
+        {# 履修中(成績待ち)の単位。GPA には入らないので別枠で出す #}
+        <div class="stat-box is-pending">
+          <div class="label">{{ t('academic.units_in_progress') }}</div>
+          <div class="value">{{ summary.units_in_progress }}</div>
+        </div>
+        {% endif %}
       </div>
       <div class="progress-wrap">
         <div class="progress-bar">
+          {# 履修中のぶんは薄い色で先に置き、確定した単位を濃い色で重ねる #}
+          {% if summary.units_in_progress %}
+          <div class="progress-fill is-pending"
+               style="width: {{ summary.progress_with_ip_pct }}%;"></div>
+          {% endif %}
           <div class="progress-fill" style="width: {{ summary.progress_pct }}%;"></div>
         </div>
         <div class="progress-caption">
@@ -62,28 +74,59 @@
     </div>
   </div>
 
+  {# 履修計画・予定表の取り込み・(取り込み済みなら)成績表の再取り込み #}
   <div class="planner-row">
     <a class="btn btn-primary" href="{{ school.planner_url }}" target="_blank" rel="noopener">
       {{ t('academic.planner_btn', planner=school.planner_name) }}
     </a>
-    <span class="fine-print">{{ t('academic.planner_note', planner=school.planner_name) }}</span>
+
+    <details class="inline-upload">
+      <summary class="btn">{{ t('academic.schedule_btn') }}</summary>
+      <div class="inline-upload-body">
+        <ol class="steps-list">
+          {% for key in school.schedule_help_keys %}<li>{{ t(key) }}</li>{% endfor %}
+        </ol>
+        <form method="post" action="{{ url_for('academic_schedule') }}"
+              enctype="multipart/form-data" class="inline-form">
+          <input type="file" name="file" accept=".html,.htm" required>
+          <button class="btn btn-primary" type="submit">{{ t('common.upload') }}</button>
+        </form>
+        <p class="fine-print">{{ t('academic.schedule_note') }}</p>
+      </div>
+    </details>
+
+    {# 取り込み済みなら、成績表の取り込みは右端の小さなボタンに畳む #}
+    {% if has_data %}
+    <details class="inline-upload is-secondary">
+      <summary class="btn btn-sm">{{ t('academic.reimport') }}</summary>
+      <div class="inline-upload-body">
+        {% if meta %}
+        <p class="fine-print">{{ t('academic.last_upload', date=meta.uploaded_at[:10]) }}</p>
+        {% endif %}
+        <ol class="steps-list">
+          {% for key in school.transcript_help_keys %}<li>{{ t(key) }}</li>{% endfor %}
+        </ol>
+        <form method="post" action="{{ url_for('academic_upload') }}"
+              enctype="multipart/form-data" class="inline-form">
+          <input type="file" name="file" accept=".html,.htm" required>
+          <button class="btn btn-primary" type="submit">{{ t('common.upload') }}</button>
+        </form>
+        <p class="fine-print">{{ t('academic.reupload_note') }}</p>
+      </div>
+    </details>
+    {% endif %}
   </div>
 </div>
 
-{# ------------------------------------------------ アップロード #}
+{# ---------------------------------- 成績表の取り込み(まだ何も無いときだけ大きく出す) #}
+{% if not has_data %}
 <div class="card">
   <div class="card-head">
     <h2 class="card-title">{{ t('academic.upload_title') }}</h2>
-    {% if meta %}
-    <span class="term-meta">{{ t('academic.last_upload', date=meta.uploaded_at[:10]) }}</span>
-    {% endif %}
   </div>
-
-  {# 手順の文言は i18n.py 側。school.py はキーの並びだけを持つ #}
   <ol class="steps-list">
     {% for key in school.transcript_help_keys %}<li>{{ t(key) }}</li>{% endfor %}
   </ol>
-
   <form method="post" action="{{ url_for('academic_upload') }}"
         enctype="multipart/form-data" class="inline-form">
     <input type="file" name="file" accept=".html,.htm" required>
@@ -91,13 +134,21 @@
   </form>
   <p class="fine-print">{{ t('academic.reupload_note') }}</p>
 </div>
+{% endif %}
 
-{# ------------------------------------------------ 学期ごとの履修 #}
+{# ------------------------------------------------ 学期ごとの履修
+   既定では最新の 1 学期だけ。残りは「すべて表示」で開く(画面が長くなるため)。
+   成績が N/A の科目は、その場でプルダウンから成績を入れられる。 #}
 {% if has_data %}
-  {% for term in terms %}
+  {% for term in visible_terms %}
   <div class="card">
     <div class="term-head">
-      <h2 class="card-title">{{ term.term }}</h2>
+      <h2 class="card-title">
+        {{ term.term }}
+        {%- if term.is_in_progress %}
+        <span class="ip-tag">{{ t('academic.in_progress') }}</span>
+        {%- endif %}
+      </h2>
       <span class="term-meta">
         {{ t('academic.term_summary', gpa="%.2f"|format(term.gpa), units=term.units) }}
       </span>
@@ -114,11 +165,27 @@
       </thead>
       <tbody>
         {% for c in term.courses %}
+        {% set pending = c.grade == in_progress_label %}
         <tr>
           <td class="cell-strong">{{ c.code }}</td>
           <td class="cell-sub">{{ c.title or t('common.none') }}</td>
           <td class="num">{{ c.units }}</td>
-          <td><span class="grade-pill">{{ c.grade }}</span></td>
+          <td>
+            {% if pending %}
+            {# 成績が出たらここで入力する。保存すると GPA に反映される #}
+            <form class="grade-form" method="post"
+                  action="{{ url_for('academic_set_grade', row_id=c.id) }}">
+              {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+              <select name="grade" aria-label="{{ t('academic.grade_placeholder') }}">
+                <option value="">{{ in_progress_label }}</option>
+                {% for g in school.grade_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+              </select>
+              <button class="btn btn-sm" type="submit">{{ t('academic.set_grade') }}</button>
+            </form>
+            {% else %}
+            <span class="grade-pill">{{ c.grade }}</span>
+            {% endif %}
+          </td>
           <td class="cell-actions">
             <form method="post" action="{{ url_for('academic_delete', row_id=c.id) }}">
               <button class="btn btn-sm" type="submit" title="{{ t('common.delete') }}">×</button>
@@ -130,6 +197,18 @@
     </table>
   </div>
   {% endfor %}
+
+  {% if hidden_count %}
+  <p class="show-all-row">
+    {% if show_all %}
+    <a class="btn btn-sm" href="{{ url_for('academic') }}">{{ t('academic.hide_terms') }}</a>
+    {% else %}
+    <a class="btn btn-sm" href="{{ url_for('academic', all=1) }}">
+      {{ t('academic.show_all_terms', count=hidden_count) }}
+    </a>
+    {% endif %}
+  </p>
+  {% endif %}
 {% else %}
 <div class="card">
   <p class="empty-state">{{ t('academic.no_data') }}</p>
@@ -162,11 +241,12 @@
           <input id="m-units" type="text" name="units" placeholder="4" required>
         </div>
         <div>
-          <label for="m-grade">{{ t('academic.col_grade') }}</label>
-          <input id="m-grade" type="text" name="grade" placeholder="A-" required>
+          <label for="m-grade">{{ t('academic.col_grade') }}（{{ t('common.optional') }}）</label>
+          <input id="m-grade" type="text" name="grade" placeholder="A-">
         </div>
       </div>
     </div>
+    <p class="fine-print">{{ t('academic.grade_optional') }}</p>
     <button class="btn" type="submit">{{ t('common.add') }}</button>
   </form>
 </details>

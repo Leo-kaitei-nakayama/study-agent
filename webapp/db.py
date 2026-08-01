@@ -855,16 +855,48 @@ def get_official_totals(user_id: int) -> dict:
 
 
 def add_transcript_course(user_id: int, term: str, code: str, title: str,
-                          units: float, grade: str):
-    """手入力で 1 件だけ足す(HTML の解析に失敗したときの逃げ道)。
+                          units: float, grade: str, source: str = "manual"):
+    """履修を 1 件足す。
 
-    source='manual' なので、後で成績表を再アップロードしても消えない。
+    source='manual'(既定)なら、後で成績表を再アップロードしても消えない。
     """
     with _conn() as c:
         c.execute("""INSERT INTO transcript_courses
                      (user_id, term, code, title, units, grade, source)
-                     VALUES (%s, %s, %s, %s, %s, %s, 'manual')""",
-                  (user_id, term, code, title, units, grade))
+                     VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                  (user_id, term, code, title, units, grade, source))
+
+
+def replace_schedule(user_id: int, courses: list[dict]) -> int:
+    """履修予定表を入れ替える(source='schedule' の行だけ総入れ替え)。
+
+    成績を入力済みの行は source が 'manual' に変わっているのでここでは消えない。
+    予定表を貼り直しても、入力した成績が失われないようにするため。
+    追加した件数を返す。
+    """
+    with _conn() as c:
+        c.execute("DELETE FROM transcript_courses "
+                  "WHERE user_id=%s AND source='schedule'", (user_id,))
+        for row in courses:
+            c.execute("""INSERT INTO transcript_courses
+                         (user_id, term, code, title, units, grade, source)
+                         VALUES (%s, %s, %s, %s, %s, %s, 'schedule')""",
+                      (user_id, row.get("term", "Unknown"), row["code"],
+                       row.get("title", ""), row["units"], row["grade"]))
+        return len(courses)
+
+
+def set_transcript_grade(user_id: int, row_id: int, grade: str) -> bool:
+    """履修中の科目に、後から出た成績を入れる。
+
+    同時に source を 'manual' にする。こうしておくと、次に履修予定表や
+    成績表を取り込み直しても、手で入れた成績が上書きされない。
+    """
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE transcript_courses SET grade=%s, source='manual' "
+            "WHERE id=%s AND user_id=%s", (grade, row_id, user_id))
+        return cur.rowcount > 0
 
 
 def list_transcript_courses(user_id: int) -> list:

@@ -79,6 +79,14 @@ UNITS_RE = re.compile(r"^\d{1,2}(\.\d{1,2})?$")
 TOTALS_RE = re.compile(
     r"^(Term|Cumulative|Dept|School|Transfer)\s+Totals$", re.IGNORECASE)
 
+# 履修中でまだ成績が出ていない科目に入れる印。
+# GPA にも取得単位にも数えず、「履修中」として別に集計する。
+IN_PROGRESS = "N/A"
+IN_PROGRESS_GRADES = {"N/A", "NA", "IP", "IN PROGRESS", ""}
+
+# 小数点つきの単位数("4.0")。整数だけの列(セクション番号など)と区別するのに使う。
+DECIMAL_UNITS_RE = re.compile(r"^\d{1,2}\.\d{1,2}$")
+
 # 大学が計算した公式の集計値。ラベル → 内部で使う名前。
 OFFICIAL_LABELS = {
     "UC GPA": "gpa",
@@ -355,6 +363,117 @@ def parse_transcript_html(html: str, school_name: str | None = None) -> dict:
             "official": _parse_official_totals(html), "error": None}
 
 
+def _find_course_code(cells: list[str], before: int) -> tuple[str, int, int] | None:
+    """cells[:before] から科目コードを探す。(コード, 開始位置, 終了位置) か None。
+
+    「学科 + 番号」が別セルの形と、1 セルに収まった形の両方に対応する。
+
+    **左から探す**のが要点。履修予定表には科目コードのあとに種別と節
+    ("Lec"/"A"、"Sem"/"1")が並ぶ列があり、右から探すと "SEM 1" を科目
+    コードと取り違える。科目コードの列は必ずそれらより左にある。
+    """
+    for i in range(0, before - 1):
+        dept, num = cells[i].strip(), cells[i + 1].strip()
+        if DEPT_RE.match(dept.upper()) and COURSE_NUM_RE.match(num.upper()):
+            return f"{dept.upper()} {num.upper()}", i, i + 1
+    for i in range(0, before):
+        if COURSE_CODE_RE.match(cells[i].strip().upper()):
+            return _clean(cells[i].upper()), i, i
+    return None
+
+
+def _parse_schedule_row(cells: list[str]) -> dict | None:
+    """履修予定表(Study List)の 1 行 → 履修 1 件。違えば None。
+
+    成績欄がまだ無いので、単位数を手がかりにする。セクション番号(5 桁)や
+    時限は単位数として拾わないよう、小数つきの値を優先する。
+    """
+    if len(cells) < 2 or TOTALS_RE.match(cells[0].strip()):
+        return None
+
+    # まず「小数つきの単位数」を探し、無ければ 1〜2 桁の整数を単位数とみなす
+    units = units_idx = None
+    for pattern in (DECIMAL_UNITS_RE, UNITS_RE):
+        for i, cell in enumerate(cells):
+            if not pattern.match(cell.strip()):
+                continue
+            value = float(cell)
+            if 0 < value <= 25 and _find_course_code(cells, i):
+                units, units_idx = value, i
+                break
+        if units is not None:
+            break
+    if units is None:
+        return None
+
+    found = _find_course_code(cells, units_idx)
+    if not found:
+        return None
+    code, code_start, code_end = found
+
+    # 単位数の直後に成績があるなら使う(成績表を読ませたときのため)
+    grade = IN_PROGRESS
+    if units_idx + 1 < len(cells) and GRADE_RE.match(cells[units_idx + 1].strip().upper()):
+        grade = cells[units_idx + 1].strip().upper()
+
+    candidates = [cells[i] for i in range(0, code_start)] + \
+                 [cells[i] for i in range(code_end + 1, units_idx)]
+    candidates = [c.strip() for c in candidates
+                  if c.strip() and not UNITS_RE.match(c.strip())
+                  and not DECIMAL_UNITS_RE.match(c.strip())]
+    title = max(candidates, key=len) if candidates else ""
+
+    return {"code": code, "title": title, "units": units, "grade": grade}
+
+
+def parse_schedule_html(html: str, school_name: str | None = None) -> dict:
+    """履修予定表(Study List)の HTML → まだ成績が出ていない履修一覧。
+
+    返す形は parse_transcript_html と同じだが、grade は "N/A"(履修中)になる。
+    学期が書かれていなければ、今のクォーターのものとして扱う。
+    """
+    import weeks  # 循環 import を避けるためここで読む
+
+    parser = _Blocks()
+    parser.feed(html)
+    parser.close()
+
+    courses: list[dict] = []
+    seen: set[tuple] = set()
+    current_term = None
+
+    for block in parser.blocks:
+        if block["type"] == "text":
+            term = _normalize_term(block["text"])
+            if term:
+                current_term = term
+            continue
+
+        cells = block["cells"]
+        row = _parse_schedule_row(cells)
+        if row is None:
+            term = _normalize_term(" ".join(c for c in cells if c.strip()))
+            if term:
+                current_term = term
+            continue
+
+        row["term"] = current_term or weeks.term_of()
+        key = (row["term"], row["code"])
+        if key in seen:          # 同じ科目が複数の表に出ていても 1 件にする
+            continue
+        seen.add(key)
+        courses.append(row)
+
+    if not courses:
+        return {"courses": [], "terms": [], "error":
+                "この HTML から履修科目を読み取れませんでした。"
+                "Student Access の「Study List」ページを保存した .html か"
+                "確認してください。下の手入力でも登録できます。"}
+
+    terms = sorted({c["term"] for c in courses}, key=term_sort_key)
+    return {"courses": courses, "terms": terms, "error": None}
+
+
 def compute_gpa(courses: list[dict], school_name: str | None = None,
                 official: dict | None = None) -> dict:
     """履修一覧 → GPA と単位数のまとめ。
@@ -380,11 +499,18 @@ def compute_gpa(courses: list[dict], school_name: str | None = None,
     gpa_units = 0.0
     units_earned = 0.0
     units_attempted = 0.0
+    units_in_progress = 0.0
 
     for c in courses:
         units = float(c.get("units") or 0)
+        grade = (c.get("grade") or "").strip()
+
+        # 履修中(成績待ち)は GPA にも取得単位にも数えず、別に足す
+        if grade.upper() in IN_PROGRESS_GRADES:
+            units_in_progress += units
+            continue
+
         units_attempted += units
-        grade = c.get("grade", "")
         # ポイントは必ず成績記号から引き直す。DB から読んだ行には "points" が
         # 入っていない(保存しているのは成績記号だけ)ため、c["points"] に
         # 頼ると GPA が 0 になる。
@@ -415,9 +541,14 @@ def compute_gpa(courses: list[dict], school_name: str | None = None,
         "grade_points": round(grade_points, 3),
         "units_earned": round(units_earned, 2),
         "units_attempted": round(units_attempted, 2),
+        # 履修中(成績待ち)の単位。GPA には入らないが、卒業までの見通しには効く
+        "units_in_progress": round(units_in_progress, 2),
         "goal_units": goal,
         "remaining": round(max(0.0, goal - units_earned), 2),
         "progress_pct": round(min(100.0, units_earned / goal * 100), 1) if goal else 0.0,
+        # 履修中ぶんまで終えたときの進捗(進捗バーの薄い部分)
+        "progress_with_ip_pct": round(
+            min(100.0, (units_earned + units_in_progress) / goal * 100), 1) if goal else 0.0,
         "is_official": is_official,
     }
 
@@ -434,11 +565,16 @@ def group_by_term(courses: list[dict], school_name: str | None = None) -> list[d
     out = []
     for term, rows in buckets.items():
         summary = compute_gpa(rows, school_name)
+        in_progress = summary["units_in_progress"]
         out.append({
             "term": term,
             "courses": sorted(rows, key=lambda r: r["code"]),
             "gpa": summary["gpa"],
-            "units": summary["units_attempted"],
+            # 見出しに出す単位数は履修中ぶんも含めた合計
+            "units": round(summary["units_attempted"] + in_progress, 2),
+            "units_in_progress": in_progress,
+            # 成績待ちが 1 件でもあれば、その学期は「履修中」として扱う
+            "is_in_progress": in_progress > 0,
         })
     out.sort(key=lambda t: term_sort_key(t["term"]), reverse=True)
     return out
