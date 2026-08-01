@@ -12,6 +12,8 @@ Canvas から科目・シラバス・課題を取り込み、いま見ている�
 | `manifest.json` | 権限とエントリポイントの宣言 |
 | `background.js` | 同期・スクリーンショット・通知。サーバーとのやり取りは全部ここ |
 | `content.js` | Canvas のページ上でリンクを拾って報告するだけ(追加でページを開かない) |
+| `drawer.js` | ページ隅の引き出し UI。本文を読んで「参考の下書き」を頼む |
+| `demo/page-control.html` | ページ操作の練習台(実際の Canvas には触らない) |
 | `popup.html` / `popup.js` | アイコンを押したときの小窓 |
 
 ## 権限について
@@ -94,6 +96,22 @@ Canvas を入れてあるので `fetch(..., {credentials: "include"})` にその
 
 古い対応表は必ず作り直されるので、拡張機能を入れ替えた直後の1回は
 フルクロールになる。手で「再取得」を押す必要はない。
+
+## ページ隅の引き出し (`drawer.js`)
+
+Canvas / Gradescope / zyBooks / PrairieLearn / Perusall / Ed の各ページに
+小さなタブが出る。押すと引き出しが開き、「Generate reference draft」で
+**そのページの本文だけ** を読んでサーバーに送り、下書きを受け取る。
+
+- 見分けは `router.py` の `detect_context()` と同じ規則
+  (Canvas / 埋め込み LTI / 外部サイト)
+- 本文は複製した DOM から nav・footer などを除いて拾う。元のページは触らない
+- UI は Shadow DOM に入れてあるので、ページ側の CSS と混ざらない
+- `all_frames: true` … Canvas に埋まった LTI の中でも出す
+- `<all_urls>` は **要求していない**。上に挙げたサイトだけ
+
+**押さないと何も起きない。** 開いただけでは送信しないし、提出ボタンは
+探しにも行かない。
 
 ## 週の始まり(毎週月曜)
 

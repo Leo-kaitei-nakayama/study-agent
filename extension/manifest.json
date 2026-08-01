@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Study Agent Canvas Sync",
-  "version": "0.4.0",
-  "description": "Syncs the Canvas courses you pick \u2014 syllabi, rubrics, weekly modules and assignments \u2014 drafts answers for practice questions, and can explain a screenshot of a page. Opt-in; never submits anything.",
+  "version": "0.5.0",
+  "description": "Syncs the Canvas courses you pick — syllabi, rubrics, weekly modules and assignments — drafts answers for practice questions, and can explain a screenshot of a page. Opt-in; never submits anything.",
   "permissions": [
     "storage",
     "alarms",
@@ -30,6 +30,23 @@
         "content.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://canvas.eee.uci.edu/*",
+        "https://*.instructure.com/*",
+        "https://*.gradescope.com/*",
+        "https://*.zybooks.com/*",
+        "https://*.prairielearn.com/*",
+        "https://*.prairielearn.org/*",
+        "https://*.perusall.com/*",
+        "https://*.edstem.org/*"
+      ],
+      "js": [
+        "drawer.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "action": {

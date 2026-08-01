@@ -615,6 +615,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await captureAndAsk(msg));
         return;
       }
+      if (msg.action === "generateDraft") {
+        // 引き出し(drawer.js)からの下書き依頼をサーバーに中継する。
+        // ページ本文は content script 側が読んで payload に入れてある
+        // (そのタブはすでにログイン済みなので、サーバーから取りに行くより確実)。
+        const { token } = await chrome.storage.sync.get({ token: "" });
+        if (!token) {
+          sendResponse({ ok: false, error: "Connect the extension on your dashboard first." });
+          return;
+        }
+        try {
+          const data = await apiPost("/api/study/generate-draft", token, msg.payload || {});
+          sendResponse({ ok: true, data });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e.message || e) });
+        }
+        return;
+      }
       if (msg.action === "checkNotifications") {
         await pollNotifications();
         sendResponse({ ok: true });
