@@ -306,3 +306,90 @@ a.cell-sub:hover { text-decoration: underline; }
   color: var(--accent-text); background: var(--accent-bg);
   border-radius: 999px; padding: 1px 7px; cursor: help;
 }
+
+/* ------------------------------------------------ クォーターのタブ
+   ノート一覧を学期で切り替える。現在のタブだけ下線と濃い文字にする。 */
+.term-tabs {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); margin-bottom: 20px;
+}
+.term-tab {
+  font-size: 13px; color: var(--text-2); text-decoration: none;
+  padding: 8px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  white-space: nowrap;
+}
+.term-tab:hover { color: var(--text); }
+.term-tab.is-active {
+  color: var(--accent-text); border-bottom-color: var(--accent); font-weight: 600;
+}
+
+/* ------------------------------------------------ 今週の課題 */
+.assignment-list { list-style: none; margin: 0; padding: 0; }
+.assignment-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.assignment-row:last-child { border-bottom: none; }
+.assignment-kind {
+  flex: 0 0 auto; font-size: 11px; font-weight: 600; border-radius: 999px;
+  padding: 2px 10px; background: var(--bg); color: var(--text-2);
+  border: 1px solid var(--border); white-space: nowrap;
+}
+.assignment-kind.kind-quiz { background: #eef4fd; color: var(--accent-text); border-color: #cfe0f5; }
+.assignment-kind.kind-short { background: #eef7ef; color: #2c6b3f; border-color: #cfe6d5; }
+.assignment-kind.kind-essay { background: #fdf3e8; color: #8a5a1a; border-color: #f0dcc2; }
+.assignment-main { flex-grow: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.assignment-name { font-weight: 500; }
+.assignment-meta { font-size: 12px; color: var(--text-muted); }
+.assignment-status { flex: 0 0 auto; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+.assignment-status.is-done { color: #2c6b3f; font-weight: 500; }
+.assignment-status.is-done a { color: inherit; }
+.assignment-status.is-manual { color: #8a5a1a; }
+.week-actions {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px;
+}
+.week-actions .fine-print { margin: 0; }
+
+/* ------------------------------------------------ ノート行(チェック + 表示/DL) */
+.list-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding-bottom: 12px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.check-inline {
+  display: flex; align-items: center; gap: 8px; margin: 0;
+  font-size: 13px; color: var(--text-2); cursor: pointer;
+}
+.check-inline input { width: auto; margin: 0; }
+.note-check { width: auto; margin: 0; flex: 0 0 auto; }
+.note-title { color: var(--text); text-decoration: none; font-weight: 500; }
+.note-title:hover { color: var(--accent-text); text-decoration: underline; }
+.note-row .btn-sm { flex: 0 0 auto; }
+
+.danger-row { margin-top: -6px; text-align: right; }
+
+/* ------------------------------------------------ ノートのプレビュー */
+.doc-actions { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.doc-body { font-size: 14px; line-height: 1.75; }
+.doc-body h2 { font-size: 18px; margin: 24px 0 8px; }
+.doc-body h3 { font-size: 15px; margin: 20px 0 6px; }
+.doc-body h4, .doc-body h5, .doc-body h6 { font-size: 14px; margin: 16px 0 4px; }
+.doc-body > :first-child { margin-top: 0; }
+.doc-body p { margin: 0 0 12px; }
+.doc-body ul { margin: 0 0 12px; padding-left: 22px; }
+.doc-body li { margin-bottom: 4px; }
+.doc-body hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+.doc-body code {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 5px; font-size: 13px;
+}
+.doc-body pre {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px; overflow-x: auto; margin: 0 0 14px;
+}
+.doc-body pre code { background: none; border: none; padding: 0; }
+
+@media (max-width: 560px) {
+  .note-row { flex-wrap: wrap; }
+  .note-kind { flex-basis: auto; }
+}
