@@ -919,44 +919,6 @@ def academic_upload():
     return redirect(url_for("academic"))
 
 
-@app.route("/academic/schedule", methods=["POST"])
-@login_required
-def academic_schedule():
-    """履修予定表(Study List)を取り込み、まだ成績が出ていない科目を足す。
-
-    成績は "N/A"(履修中)として入り、出たら画面から入力できる。
-    GPA や取得単位には数えず、「履修中」として別に集計する。
-    """
-    user_id = session["user_id"]
-    profile = db.get_profile(user_id)
-    f = request.files.get("file")
-    if not f or not f.filename:
-        flash(t("flash.schedule_missing"))
-        return redirect(url_for("academic"))
-
-    raw = f.read()
-    try:
-        html = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        html = raw.decode("latin-1", errors="replace")
-
-    result = transcript_parser.parse_schedule_html(
-        html, profile["school"] if profile else None)
-    if result["error"]:
-        flash(result["error"])
-        return redirect(url_for("academic"))
-
-    # すでに成績が確定している科目は取り込まない(履修中として二重に出さないため)
-    known = {(r["term"], r["code"]) for r in db.list_transcript_courses(user_id)
-             if r["source"] != "schedule"}
-    fresh = [c for c in result["courses"] if (c["term"], c["code"]) not in known]
-
-    count = db.replace_schedule(user_id, fresh)
-    flash(t("flash.schedule_imported", count=count,
-            terms=", ".join(result["terms"])))
-    return redirect(url_for("academic"))
-
-
 @app.route("/academic/grade/<int:row_id>", methods=["POST"])
 @login_required
 def academic_set_grade(row_id):

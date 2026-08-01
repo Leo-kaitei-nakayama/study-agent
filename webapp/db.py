@@ -867,25 +867,6 @@ def add_transcript_course(user_id: int, term: str, code: str, title: str,
                   (user_id, term, code, title, units, grade, source))
 
 
-def replace_schedule(user_id: int, courses: list[dict]) -> int:
-    """履修予定表を入れ替える(source='schedule' の行だけ総入れ替え)。
-
-    成績を入力済みの行は source が 'manual' に変わっているのでここでは消えない。
-    予定表を貼り直しても、入力した成績が失われないようにするため。
-    追加した件数を返す。
-    """
-    with _conn() as c:
-        c.execute("DELETE FROM transcript_courses "
-                  "WHERE user_id=%s AND source='schedule'", (user_id,))
-        for row in courses:
-            c.execute("""INSERT INTO transcript_courses
-                         (user_id, term, code, title, units, grade, source)
-                         VALUES (%s, %s, %s, %s, %s, %s, 'schedule')""",
-                      (user_id, row.get("term", "Unknown"), row["code"],
-                       row.get("title", ""), row["units"], row["grade"]))
-        return len(courses)
-
-
 def set_transcript_grade(user_id: int, row_id: int, grade: str) -> bool:
     """履修中の科目に、後から出た成績を入れる。
 
