@@ -463,3 +463,19 @@ a.cell-sub:hover { text-decoration: underline; }
 .select-banner .check-inline { color: inherit; }
 .assignment-check { width: auto; margin: 0; flex: 0 0 auto; }
 .assignment-check:disabled { opacity: 0.35; }
+
+/* ------------------------------------------------ 科目タイルの編集モード
+   iPhone のホーム画面と同じく、角の ✕ でそのタイルごと消す。 */
+.tile-wrap { position: relative; display: flex; }
+.tile-wrap .notes-tile { flex: 1 1 auto; }
+.tile-wrap.is-editing .notes-tile { border-color: #e8cccc; }
+.tile-remove {
+  position: absolute; top: -8px; left: -8px; z-index: 2;
+  width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #a52121; color: #fff; text-decoration: none;
+  font-size: 16px; line-height: 1; font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.tile-remove:hover { background: #8a1b1b; }
+.danger-row { display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
