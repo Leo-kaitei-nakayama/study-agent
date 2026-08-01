@@ -84,25 +84,6 @@ async function fetchActiveCourses() {
     }));
 }
 
-// 学期の一覧を返す。今日が期間内の学期には isCurrent を立てる。
-async function fetchTerms() {
-  const courses = await fetchActiveCourses();
-  const byName = new Map();
-  const now = Date.now();
-  for (const c of courses) {
-    if (!byName.has(c.term)) {
-      let isCurrent = false;
-      if (c.termStart && c.termEnd) {
-        const s = Date.parse(c.termStart), e = Date.parse(c.termEnd);
-        isCurrent = !isNaN(s) && !isNaN(e) && now >= s && now <= e;
-      }
-      byName.set(c.term, { name: c.term, count: 0, isCurrent });
-    }
-    byName.get(c.term).count += 1;
-  }
-  return Array.from(byName.values());
-}
-
 async function fetchSyllabus(courseId) {
   const data = await canvasGet(`/api/v1/courses/${courseId}?include[]=syllabus_body`);
   const html = data.syllabus_body || "";
@@ -232,12 +213,21 @@ async function runSync(reason = "manual") {
 
   await setStatus("Syncing...");
   try {
-    const { courseMap, courseMapTerm } = await chrome.storage.local.get(
-      { courseMap: null, courseMapTerm: null });
-    const { selectedTerm } = await chrome.storage.sync.get({ selectedTerm: "" });
+    const { courseMap, courseMapKey } = await chrome.storage.local.get(
+      { courseMap: null, courseMapKey: null });
+    const { selectedCourseIds } = await chrome.storage.sync.get(
+      { selectedCourseIds: [] });
+
+    // 1 つも選ばれていなければ何もしない。「選んでいない = 全部」にすると、
+    // オリエンテーションや去年の授業まで巻き込んでしまう。
+    if (!selectedCourseIds || selectedCourseIds.length === 0) {
+      const msg = "Pick which courses to sync in the popup first.";
+      await setStatus(msg);
+      return { ok: false, error: msg };
+    }
 
     let result;
-    if (needsFullCrawl(courseMap, courseMapTerm, selectedTerm)) {
+    if (needsFullCrawl(courseMap, courseMapKey, selectedCourseIds)) {
       // 科目一覧・シラバス・課題を全部巡回して構造を記憶する
       result = await fullCrawl(state.token);
     } else {
@@ -259,17 +249,26 @@ async function runSync(reason = "manual") {
 
 // 覚えている科目一覧を使ってよいか、作り直すべきかを決める。
 //
-// **学期の絞り込みが効くのはフルクロールのときだけ** なので、覚えた一覧が
-// 別の学期のものだと、差分同期はその古い一覧をずっと使い続けてしまう。
-// 学期を変えても過去の科目が同期され続けていたのはこれが原因。
+// **絞り込みが効くのはフルクロールのときだけ。** 差分同期は覚えた対応表を
+// そのまま使うので、選ぶ科目を変えても対応表が古いままだと、外した科目が
+// 同期され続ける。そこで対応表には「どの選択で作ったか」を添えてあり、
+// 選択が変わっていれば作り直す。
 //
-// courseMapTerm が null = 学期を記録するようになる前に作られた一覧。
-// 中身が信用できないので作り直す(だから拡張機能を入れ替えた直後の1回は
-// 必ずフルクロールになる)。
-function needsFullCrawl(courseMap, courseMapTerm, selectedTerm) {
+// courseMapKey が無い = 選択を記録する前に作られた古い対応表。中身が
+// 信用できないので作り直す。
+function selectionKey(ids) {
+  // n > 0 まで見るのは、Number(null) が 0、Number("") も 0 になるため。
+  // NaN だけ落とすと null が「id 0」として残り、選択が変わっていないのに
+  // 別の鍵になってしまう。Canvas の科目 ID は必ず正の整数。
+  return (ids || []).map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b).join(",");
+}
+
+function needsFullCrawl(courseMap, courseMapKey, selectedCourseIds) {
   if (!courseMap) return true;
-  if (courseMapTerm === null || courseMapTerm === undefined) return true;
-  return courseMapTerm !== (selectedTerm || "");
+  if (courseMapKey === null || courseMapKey === undefined) return true;
+  return courseMapKey !== selectionKey(selectedCourseIds);
 }
 
 // 初回フルクロール: 科目一覧を取得し、各科目のシラバス・課題を巡回する。
@@ -280,34 +279,30 @@ async function fullCrawl(token) {
   try { known = await apiGet("/api/extension/state", token); } catch (e) {}
   const alreadySynced = new Set(known.synced_syllabi || []);
 
-  const { selectedTerm } = await chrome.storage.sync.get({ selectedTerm: "" });
+  const { selectedCourseIds } = await chrome.storage.sync.get(
+    { selectedCourseIds: [] });
+  const wanted = new Set((selectedCourseIds || []).map(Number));
   const everything = await fetchActiveCourses();
-  // 学期が指定されていればその学期だけに絞る(空文字なら全学期)。
-  //
-  // Canvas の enrollment_state=active は「登録が生きている科目」を返すので、
-  // 終わった学期の科目もそのまま出てくる。絞らないと Math 2B Winter 2025 の
-  // ような過去の科目まで取り込まれる。
-  const courses = selectedTerm
-    ? everything.filter((c) => c.term === selectedTerm)
-    : everything;
+  // **選んだ科目だけ。** 学期で自動的に絞るのはやめた — Canvas は
+  // オリエンテーション用のスペースも、年をまたぐ研修コースも、普通の授業と
+  // まったく同じ形で返してくるうえ、学期名が付いていないものも多いので、
+  // 機械的に「今年のぶん」を見分けられなかった。
+  const courses = everything.filter((c) => wanted.has(Number(c.id)));
 
-  if (selectedTerm && courses.length === 0) {
-    // 学期名が一致しなかった。全部取り込んでしまうより、何もせず知らせる。
-    await progressInit(`No course in ${selectedTerm}`, []);
+  if (courses.length === 0) {
+    await progressInit("Nothing selected", []);
     await progressFinish();
     throw new Error(
-      `No active course found in "${selectedTerm}". Pick a different term in the popup.`);
+      "None of the courses you picked are in Canvas any more. Open the popup and pick again.");
   }
 
-  // full: true = 「選んだ学期の科目はこれで全部」。サーバーはこれを見て、
-  // ここに出てこない科目(前の学期のもの)を片付ける。
-  const payload = { courses: [], full: true, term: selectedTerm || "" };
+  // full: true = 「同期する科目はこれで全部」。サーバーはこれを見て、
+  // ここに出てこない科目(外した科目・前の学期のもの)を片付ける。
+  const payload = { courses: [], full: true };
   const courseMap = {};
   const skipped = everything.length - courses.length;
   await progressInit(
-    selectedTerm
-      ? `Full crawl — ${selectedTerm}${skipped ? ` (${skipped} other-term course(s) skipped)` : ""}`
-      : "Full crawl — all terms",
+    `Full crawl — ${courses.length} picked${skipped ? ` (${skipped} not picked)` : ""}`,
     courses.map((c) => c.name));
 
   for (let i = 0; i < courses.length; i++) {
@@ -353,16 +348,17 @@ async function fullCrawl(token) {
   }
 
   const res = await apiPost("/api/extension/sync", token, payload);
-  // どの学期ぶんの一覧かも一緒に覚える。次の同期でこれを見て、学期が
-  // 変わっていたら作り直す(差分同期が古い学期を引きずらないように)。
-  await chrome.storage.local.set({ courseMap, courseMapTerm: selectedTerm || "",
+  // どの選択で作った一覧かも一緒に覚える。次の同期でこれを見て、選択が
+  // 変わっていたら作り直す(差分同期が外した科目を引きずらないように)。
+  await chrome.storage.local.set({ courseMap,
+                                   courseMapKey: selectionKey(selectedCourseIds),
                                    courseMapSavedAt: Date.now() });
   await progressFinish();
 
   // 前の学期の科目が片付いたら、そのことも出す(黙って消さない)
   const dropped = (res && res.pruned) || [];
-  let mode = selectedTerm ? `Full crawl — ${selectedTerm}` : "Full crawl — all terms";
-  if (dropped.length) mode += ` · removed ${dropped.length} course(s) from other terms`;
+  let mode = `Full crawl — ${courses.length} picked course(s)`;
+  if (dropped.length) mode += ` · removed ${dropped.length} you no longer sync`;
   return { courses: courses.length, mode };
 }
 
@@ -428,7 +424,7 @@ async function incrementalSync(token, courseMap) {
 // 記憶した科目一覧を強制的に忘れて、次回フルクロールし直す(手動リセット用)
 async function forgetCourseMap() {
   await chrome.storage.local.remove(
-    ["courseMap", "courseMapTerm", "courseMapSavedAt"]);
+    ["courseMap", "courseMapKey", "courseMapSavedAt"]);
 }
 
 async function setStatus(text) {
@@ -527,9 +523,9 @@ async function startOfWeek() {
 // トグルがオンに切り替わった瞬間にも一度走らせる
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "sync") return;
-  // 学期を変えたら、記憶していた科目一覧は無効なので作り直す
-  if (changes.selectedTerm) {
-    forgetCourseMap().then(() => runSync("term changed"));
+  // 選ぶ科目を変えたら、記憶していた対応表は無効なので作り直す
+  if (changes.selectedCourseIds) {
+    forgetCourseMap().then(() => runSync("course selection changed"));
     return;
   }
   if (changes.syncSyllabus && changes.syncSyllabus.newValue === true) {
@@ -605,9 +601,11 @@ chrome.notifications.onClicked.addListener((id) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
-      if (msg.action === "getTerms") {
+      if (msg.action === "listCanvasCourses") {
+        // 小窓の科目チェックリスト用。Canvas から一覧を取るだけで、
+        // シラバスも課題もまだ読まない(選ばれてから読む)。
         try {
-          sendResponse({ ok: true, terms: await fetchTerms() });
+          sendResponse({ ok: true, courses: await fetchActiveCourses() });
         } catch (e) {
           sendResponse({ ok: false, error: String(e.message || e) });
         }
