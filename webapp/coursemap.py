@@ -201,6 +201,34 @@ AGENT_ALLOCATION: dict[str, list[str]] = {
 }
 
 
+# ------------------------------------------------------ 科目ではない画面の名前
+# 拡張機能の content.js は、科目名が分からないときページのタイトルから推測する。
+# そのためダッシュボードや受信トレイを開いていると、「Dashboard」という名前の
+# 科目ができてしまう。これらは授業ではないので取り込まない。
+#
+# 学生が自分で選んだ科目名(画面のプルダウン)には適用しない。ここで弾くのは
+# 拡張機能が勝手に推測してきた名前だけ。
+NON_COURSE_NAMES = {
+    "dashboard", "calendar", "inbox", "courses", "groups", "account",
+    "history", "help", "commons", "home", "notifications", "profile",
+    "settings", "canvas", "my dashboard", "course dashboard",
+    "all courses", "recent activity",
+}
+
+
+def is_real_course(name: str | None) -> bool:
+    """その名前を科目として取り込んでよいか。
+
+    Canvas の画面名(Dashboard など)や、空・短すぎるものは科目ではない。
+    """
+    if not name:
+        return False
+    cleaned = " ".join(name.split()).strip(" -–—·:|")
+    if len(cleaned) < 2:
+        return False
+    return cleaned.casefold() not in NON_COURSE_NAMES
+
+
 def allocate(kind: str) -> list[str]:
     """その種類の課題を担当する study_agent の部品を返す。
 

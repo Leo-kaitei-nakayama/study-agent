@@ -264,14 +264,32 @@ async function fullCrawl(token) {
   const alreadySynced = new Set(known.synced_syllabi || []);
 
   const { selectedTerm } = await chrome.storage.sync.get({ selectedTerm: "" });
-  let courses = await fetchActiveCourses();
-  // 学期が指定されていればその学期だけに絞る(空文字なら全学期)
-  if (selectedTerm) {
-    courses = courses.filter((c) => c.term === selectedTerm);
+  const everything = await fetchActiveCourses();
+  // 学期が指定されていればその学期だけに絞る(空文字なら全学期)。
+  //
+  // Canvas の enrollment_state=active は「登録が生きている科目」を返すので、
+  // 終わった学期の科目もそのまま出てくる。絞らないと Math 2B Winter 2025 の
+  // ような過去の科目まで取り込まれる。
+  const courses = selectedTerm
+    ? everything.filter((c) => c.term === selectedTerm)
+    : everything;
+
+  if (selectedTerm && courses.length === 0) {
+    // 学期名が一致しなかった。全部取り込んでしまうより、何もせず知らせる。
+    await progressInit(`No course in ${selectedTerm}`, []);
+    await progressFinish();
+    throw new Error(
+      `No active course found in "${selectedTerm}". Pick a different term in the popup.`);
   }
+
   const payload = { courses: [] };
   const courseMap = {};
-  await progressInit("Full crawl", courses.map((c) => c.name));
+  const skipped = everything.length - courses.length;
+  await progressInit(
+    selectedTerm
+      ? `Full crawl — ${selectedTerm}${skipped ? ` (${skipped} other-term course(s) skipped)` : ""}`
+      : "Full crawl — all terms",
+    courses.map((c) => c.name));
 
   for (let i = 0; i < courses.length; i++) {
     const course = courses[i];
@@ -318,7 +336,8 @@ async function fullCrawl(token) {
   await apiPost("/api/extension/sync", token, payload);
   await chrome.storage.local.set({ courseMap, courseMapSavedAt: Date.now() });
   await progressFinish();
-  return { courses: courses.length, mode: "Full crawl" };
+  return { courses: courses.length,
+           mode: selectedTerm ? `Full crawl — ${selectedTerm}` : "Full crawl — all terms" };
 }
 
 // 2回目以降: 記憶済みの科目IDを使い、課題の更新だけを直接確認する。

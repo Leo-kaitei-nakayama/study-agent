@@ -135,10 +135,19 @@ function loadTerms(currentValue) {
     }
     if (currentValue) {
       sel.value = currentValue;
-    } else {
-      const cur = terms.find((t) => t.isCurrent);
-      if (cur) sel.value = cur.name;   // suggested only; saved when you hit Save
+      return;
     }
+    // No term chosen yet: pick the current one AND save it right away.
+    //
+    // This used to only preselect it in the dropdown, leaving storage at ""
+    // (= All terms). The popup then showed "Spring 2026" while the sync
+    // actually crawled every term the student is still enrolled in, dragging
+    // in old courses like "Math 2B Winter 2025". What you see must be what
+    // runs, so persist it here.
+    const cur = terms.find((t) => t.isCurrent);
+    if (!cur) return;
+    sel.value = cur.name;
+    chrome.storage.sync.set({ selectedTerm: cur.name });
   });
 }
 
@@ -156,7 +165,25 @@ function saveState() {
   });
 }
 
+// Run a sync using the term that is *visible* in the dropdown, even if the
+// user never pressed Save. If that differs from what is stored, saving it is
+// enough: background.js watches storage, forgets the cached course list and
+// re-crawls on its own — so we must not also send the message, or two syncs
+// would run over each other.
 function runAction(action, busyText) {
+  const sel = document.getElementById("selectedTerm");
+  const term = sel ? sel.value : "";
+  chrome.storage.sync.get({ selectedTerm: "" }, (s) => {
+    if (s.selectedTerm !== term) {
+      setStatus("Term changed — re-fetching the course list…");
+      chrome.storage.sync.set({ selectedTerm: term });
+      return;
+    }
+    sendAction(action, busyText);
+  });
+}
+
+function sendAction(action, busyText) {
   setStatus(busyText);
   document.getElementById("syncNow").disabled = true;
   document.getElementById("recrawl").disabled = true;

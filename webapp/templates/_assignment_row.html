@@ -2,15 +2,17 @@
   課題 1 行。assignments.html から include して使う(今週ぶんと他の週で共用)。
   変数 a に課題の行が入っている前提。
 
-  select_mode が真のときは、下書きさせる課題を選ぶチェックボックスを出す。
-  エッセイと下書き済みのものはチェックできない(下書きの対象外なので)。
+  行の右端は、その課題の状態でひとつだけ出す:
+    - エッセイ        … 「本人が書く」(エージェントは扱わない)
+    - 下書き済み      … 下書きへのリンク
+    - それ以外        … **その 1 件だけ**を下書きさせる小さなボタン
+
+  ボタンは 1 行につき 1 つの小さなフォームになっている。まとめて全部作る
+  入口はわざと置いていない — 115 件が一度に走って課金される事故を防ぐため。
+
+  **提出はしない。** 作るのは下書きまでで、出すかどうかは本人が決める。
 #}
-{% set draftable = a.kind != 'essay' and a.status == 'todo' %}
 <li class="assignment-row">
-  {% if select_mode %}
-  <input class="assignment-check" type="checkbox" name="assignment_id" value="{{ a.id }}"
-         aria-label="{{ a.name }}" {% if not draftable %}disabled{% endif %}>
-  {% endif %}
   <span class="assignment-kind kind-{{ a.kind }}">{{ t('notes.akind_' ~ a.kind) }}</span>
   <span class="assignment-main">
     <span class="assignment-name">{{ a.name }}</span>
@@ -28,6 +30,12 @@
     {%- else -%}{{ t('notes.status_drafted') }}{%- endif -%}
   </span>
   {% else %}
-  <span class="assignment-status">{{ t('notes.status_todo') }}</span>
+  <form class="assignment-do" method="post" action="{{ url_for('notes_run_week') }}">
+    <input type="hidden" name="term" value="{{ selected_term }}">
+    <input type="hidden" name="assignment_id" value="{{ a.id }}">
+    <button class="btn btn-sm btn-primary" type="submit">
+      {{ t('assignments.draft_one') }}
+    </button>
+  </form>
   {% endif %}
 </li>
